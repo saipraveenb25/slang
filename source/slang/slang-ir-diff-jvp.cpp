@@ -103,6 +103,13 @@ struct JVPTranscriber
         if (IRType* typeD = differentiateType(builder, paramP->getFullType()))
         {
             IRParam* paramD = builder->emitParam(typeD);
+
+            if (auto nameP = paramP->findDecoration<IRNameHintDecoration>()){
+                StringBuilder nameSb;
+                nameSb << "d" << nameP->getName();
+                builder->addNameHintDecoration(paramD, nameSb.getUnownedSlice());
+            }
+
             SLANG_ASSERT(paramD);
             return paramD;
         }
