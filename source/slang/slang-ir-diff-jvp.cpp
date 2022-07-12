@@ -104,11 +104,9 @@ struct JVPTranscriber
         {
             IRParam* paramD = builder->emitParam(typeD);
 
-            if (auto nameP = paramP->findDecoration<IRNameHintDecoration>()){
-                StringBuilder nameSb;
-                nameSb << "d" << nameP->getName();
-                builder->addNameHintDecoration(paramD, nameSb.getUnownedSlice());
-            }
+            auto nameHintD = getJVPVarName(paramP);
+            if (nameHintD.getLength() > 0)
+                builder->addNameHintDecoration(paramD, nameHintD.getUnownedSlice());
 
             SLANG_ASSERT(paramD);
             return paramD;
@@ -125,6 +123,7 @@ struct JVPTranscriber
         {   
             auto newParamP = builder->emitParam(inoutTypeP->getValueType());
             cloneEnv.mapOldValToNew.Add(paramP, newParamP);
+            cloneInstDecorationsAndChildren(&cloneEnv, builder->getSharedBuilder(), paramP, newParamP);
 
             return newParamP;
         }
@@ -161,12 +160,30 @@ struct JVPTranscriber
         return newParamListD;
     }
 
+    // Returns "d<var-name>" to use as a name hint for variables and parameters.
+    // If no primal name is available, returns a blank string.
+    // 
+    String getJVPVarName(IRInst* varP)
+    {
+        if (auto namehintDecoration = varP->findDecoration<IRNameHintDecoration>())
+        {
+            return ("d" + String(namehintDecoration->getName()));
+        }
+
+        return String("");
+    }
+
     IRInst* differentiateVar(IRBuilder* builder, IRVar* varP)
     {
         if (IRType* typeD = differentiateType(builder, varP->getDataType()->getValueType()))
         {
             IRVar* varD = builder->emitVar(typeD);
             SLANG_ASSERT(varD);
+
+            auto nameHintD = getJVPVarName(varP);
+            if (nameHintD.getLength() > 0)
+                builder->addNameHintDecoration(varD, nameHintD.getUnownedSlice());
+
             return varD;
         }
         return nullptr;
@@ -765,7 +782,6 @@ struct JVPDerivativeContext
 
         return name;
     }
-
 
     IRBlock* emitJVPBlock(IRBuilder*    builder, 
                           IRBlock*      primalBlock,
