@@ -374,13 +374,21 @@ class ExtractExistentialValueExpr: public Expr
     DeclRef<VarDeclBase> declRef;
 };
 
+    /// Base class for higher-order function application
+    /// Eg: foo(fn) where fn is a function expression.
+    ///
+class HigherOrderInvokeExpr : public Expr
+{
+    SLANG_ABSTRACT_AST_CLASS(HigherOrderInvokeExpr)
+    Expr* baseFunction;
+};
+
     /// An expression of the form `__jvp(fn)` to access the 
     /// forward-mode derivative version of the function `fn`
     ///
-class JVPDifferentiateExpr: public Expr
+class JVPDifferentiateExpr: public HigherOrderInvokeExpr
 {
     SLANG_AST_CLASS(JVPDifferentiateExpr)
-    Expr* baseFunction;
 };
 
     /// A type expression of the form `__TaggedUnion(A, ...)`.

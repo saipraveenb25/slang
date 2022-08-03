@@ -674,6 +674,9 @@ namespace Slang
         //
         Type* _toJVPReturnType(ASTBuilder* builder, Type* primalType);
         
+        // Convert a function's original type to it's JVP type.
+        Type* processJVPFuncType(ASTBuilder* builder, FuncType* originalType);
+        
     public:
 
         bool ValuesAreEqual(
@@ -1493,6 +1496,10 @@ namespace Slang
         void AddOverloadCandidate(
             OverloadResolveContext& context,
             OverloadCandidate&		candidate);
+        
+        void AddHigherOrderOverloadCandidates(
+            Expr*                   funcExpr,
+            OverloadResolveContext& context);
 
         void AddFuncOverloadCandidate(
             LookupResultItem			item,

@@ -693,6 +693,21 @@ namespace Slang
                     callExpr->originalFunctionExpr = callExpr->functionExpr;
                     callExpr->type = QualType(candidate.resultType);
 
+                    // If the callee is the result of a higher-order function invocation,
+                    // set it's base function to the declaration corresponding to the 
+                    // resolved overload.
+                    // 
+                    if (auto higherOrderInvoke = as<HigherOrderInvokeExpr>(callExpr->functionExpr))
+                    {
+                        higherOrderInvoke->baseFunction = ConstructLookupResultExpr(
+                            candidate.item,
+                            baseExpr,
+                            higherOrderInvoke->loc,
+                            callExpr->functionExpr);
+                        
+                        higherOrderInvoke->type = candidate.funcType;
+                    }
+
                     return callExpr;
 
                 }
@@ -1363,6 +1378,11 @@ namespace Slang
                 AddOverloadCandidates(item, context);
             }
         }
+        else if (auto higherOrderExpr = as<HigherOrderInvokeExpr>(funcExpr))
+        {
+            // The expression is the result of a higher order function application.
+            AddHigherOrderOverloadCandidates(higherOrderExpr, context);
+        }
         else if (auto typeType = as<TypeType>(funcExprType))
         {
             // If none of the above cases matched, but we are
@@ -1374,6 +1394,69 @@ namespace Slang
             auto type = typeType->type;
             AddTypeOverloadCandidates(type, context);
             return;
+        }
+    }
+
+    void SemanticsVisitor::AddHigherOrderOverloadCandidates(
+        Expr*                   funcExpr,
+        OverloadResolveContext& context)
+    {
+        // Lookup the higher order function and process types accordingly. In the future,
+        // if there are enough varieties, we can have dispatch logic instead of an
+        // if-else ladder.
+        if (auto jvpExpr = as<JVPDifferentiateExpr>(funcExpr))
+        {
+            if (auto origFuncType = as<FuncType>(jvpExpr->baseFunction->type))
+            {
+                // Case: __jvp(name-resolved-to-decl-ref)
+
+                auto baseFuncDeclRef = as<DeclRefExpr>(jvpExpr->baseFunction)->declRef.as<CallableDecl>();
+                SLANG_ASSERT(baseFuncDeclRef);
+
+                OverloadCandidate candidate;
+                candidate.flavor = OverloadCandidate::Flavor::Expr;
+                candidate.funcType = as<FuncType>(processJVPFuncType(this->getASTBuilder(), origFuncType));
+                candidate.resultType = candidate.funcType->getResultType();
+                candidate.item = LookupResultItem(baseFuncDeclRef);
+
+                AddOverloadCandidate(context, candidate);
+            }
+            else if (auto origOverloadedType = as<OverloadGroupType>(jvpExpr->baseFunction->type))
+            {
+                // Case: __jvp(name-resolved-to-multiple-decl-ref)
+
+                if (auto overloadExpr = as<OverloadedExpr>(jvpExpr->baseFunction))
+                {
+                    for (auto item : overloadExpr->lookupResult2.items)
+                    {
+                        OverloadCandidate candidate;
+                        candidate.flavor = OverloadCandidate::Flavor::Expr;
+                        candidate.funcType = as<FuncType>(processJVPFuncType(
+                            this->getASTBuilder(),
+                            as<FuncType>(GetTypeForDeclRef(item.declRef, item.declRef.decl->loc))));
+                        candidate.resultType = candidate.funcType->getResultType();
+                        candidate.item = LookupResultItem(item.declRef);
+
+                        AddOverloadCandidate(context, candidate);
+                    }
+                }
+                else
+                {
+                    // Unhandled overload expr.    
+                    funcExpr->type = this->getASTBuilder()->getErrorType();
+                    getSink()->diagnose(funcExpr->loc,
+                        Diagnostics::unimplemented,
+                        funcExpr->type);
+                }
+            }
+            else
+            {
+                // Unhandled case for the inner expr.
+                funcExpr->type = this->getASTBuilder()->getErrorType();
+                getSink()->diagnose(funcExpr->loc,
+                    Diagnostics::expectedFunction,
+                    funcExpr->type);
+            }
         }
     }
 

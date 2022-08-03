@@ -681,15 +681,38 @@ struct JVPTranscriber
     InstPair transcribeConstruct(IRBuilder* builder, IRInst* origConstruct)
     {   
         IRInst* primalConstruct = cloneInst(&cloneEnv, builder, origConstruct);
+        
+        // Check if the output type can be differentiated. If it cannot be 
+        // differentiated, don't differentiate the inst
+        // 
+        if (auto diffConstructType = differentiateType(builder, origConstruct->getDataType()))
+        {
+            UCount operandCount = origConstruct->getOperandCount();
 
-        if (as<IRConstant>(origConstruct->getOperand(0)) && origConstruct->getOperandCount() == 1)
-            return InstPair(primalConstruct, nullptr);
+            List<IRInst*> diffOperands;
+            for (UIndex ii = 0; ii < operandCount; ii++)
+            {
+                // If the operand has a differential version, replace the original with
+                // the differential. Otherwise use a zero.
+                // 
+                if (auto diffInst = lookupDiffInst(origConstruct->getOperand(ii), nullptr))
+                    diffOperands.add(diffInst);
+                else
+                    diffOperands.add(getZeroOfType(builder, origConstruct->getOperand(ii)->getDataType()));
+            }
+            
+            return InstPair(
+                primalConstruct, 
+                builder->emitIntrinsicInst(
+                    diffConstructType,
+                    origConstruct->getOp(),
+                    operandCount,
+                    diffOperands.getBuffer()));
+        }
         else
-            getSink()->diagnose(origConstruct->sourceLoc,
-                    Diagnostics::unimplemented,
-                    "this construct instruction cannot be differentiated");
-
-        return InstPair(primalConstruct, nullptr);
+        {
+            return InstPair(primalConstruct, nullptr);
+        }
     }
 
     // Differentiating a call instruction here is primarily about generating
@@ -1378,7 +1401,6 @@ struct JVPDerivativeContext
         else
             builder->setInsertInto(jvpBlock);
 
-        
         // First transcribe every parameter in the block.
         for (auto param = origBlock->getFirstParam(); param; param = param->getNextParam())
         {
