@@ -54,23 +54,46 @@ struct DerivativeCallProcessContext
     {
         IRFunc* jvpFunc = nullptr;
 
+        // First get base function 
+        auto origFunc = derivOfInst->getBaseFn();
+
+        IRSpecialize* specialization = false;
+
+        // If the base is a specialize inst, get the inner fn.
+        if (auto origSpecialize = as<IRSpecialize>(origFunc))
+        {
+            specialization = origSpecialize;
+            origFunc = origSpecialize->getBase();
+        }
+
+        // We should have either a generic or a function reference on our hands.
+        SLANG_ASSERT(as<IRGeneric>(origFunc) || as<IRFunc>(origFunc));
+
         // Resolve the derivative function.
         //
         // Check for the 'JVPDerivativeReference' decorator on the
         // base function.
-        if (auto jvpRefDecorator = derivOfInst->base.get()->findDecoration<IRJVPDerivativeReferenceDecoration>())
+        if (auto jvpRefDecorator = origFunc->findDecoration<IRJVPDerivativeReferenceDecoration>())
         {
             jvpFunc = jvpRefDecorator->getJVPFunc();
         }
-        
-        // Substitute all uses of the 'derivativeOf' operation 
-        // with the resolved derivative function.
-        while (auto use = derivOfInst->firstUse)
+
+        if (specialization)
         {
-            use->set(jvpFunc);
+            // Replace the specialization target with the JVP func.
+            specialization->setOperand(0, jvpFunc);
+
+            // Then replace the JVPDifferentiate inst with the specialization.
+            derivOfInst->replaceUsesWith(specialization);
+        }
+        else
+        {
+            // Substitute all uses of the 'derivativeOf' operation 
+            // with the resolved derivative function.
+            derivOfInst->replaceUsesWith(jvpFunc);
         }
 
-        // Remove the 'derivativeOf'
+        // Remove the 'derivativeOf' inst.
         derivOfInst->removeAndDeallocate();
     }
 };

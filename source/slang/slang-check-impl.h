@@ -1567,7 +1567,7 @@ namespace Slang
 
         bool TryUnifyConjunctionType(
             ConstraintSystem&   constraints,
-            AndType*            fst,
+            Type*            fst,
             Type*               snd);
 
         // Is the candidate extension declaration actually applicable to the given type
@@ -1581,6 +1581,11 @@ namespace Slang
         DeclRef<Decl> SpecializeGenericForOverload(
             DeclRef<GenericDecl>    genericDeclRef,
             OverloadResolveContext& context);
+        
+        DeclRef<Decl> SpecializeGenericForInnerTypes(
+            DeclRef<GenericDecl>                    genericDeclRef,
+            List<Type*>                             innerParamTypes,
+            OverloadResolveContext&                 context);
 
         void AddTypeOverloadCandidates(
             Type*	        type,

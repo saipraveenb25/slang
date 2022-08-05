@@ -379,6 +379,19 @@ namespace Slang
             }
             return true;
         }
+        else if (auto andType = as<AndType>(subType))
+        {
+            // (L & R) is a subtype of T if either L or R is a subtype of T.
+            if(_isDeclaredSubtype(originalSubType, andType->left, superTypeDeclRef, outWitness, inBreadcrumbs))
+            {
+                return true;
+            }
+
+            if(_isDeclaredSubtype(originalSubType, andType->right, superTypeDeclRef, outWitness, inBreadcrumbs))
+            {
+                return true;
+            }
+        }
         // default is failure
         return false;
     }

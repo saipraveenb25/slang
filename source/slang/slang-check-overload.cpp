@@ -1227,6 +1227,73 @@ namespace Slang
         return DeclRef<Decl>(innerDecl, constraintSubst);
     }
 
+    
+    DeclRef<Decl> SemanticsVisitor::SpecializeGenericForInnerTypes(
+        DeclRef<GenericDecl>                    genericDeclRef,
+        List<Type*>                             innerParamTypes,
+        OverloadResolveContext&                 context)
+    {
+        ensureDecl(genericDeclRef, DeclCheckState::CanSpecializeGeneric);
+
+        ConstraintSystem constraints;
+        constraints.loc = context.loc;
+        constraints.genericDecl = genericDeclRef.getDecl();
+
+        // Construct a reference to the inner declaration that has any generic
+        // parameter substitutions in place already, but *not* any substutions
+        // for the generic declaration we are currently trying to infer.
+        auto innerDecl = getInner(genericDeclRef);
+        DeclRef<Decl> unspecializedInnerRef = DeclRef<Decl>(innerDecl, genericDeclRef.substitutions);
+
+        Index argCount = context.getArgCount();
+        Index paramCount = innerParamTypes.getCount();
+
+        // If there are too many arguments, we cannot possibly have a match.
+        //
+        // Note that if there are *too few* arguments, we might still have
+        // a match, because the other arguments might have default values
+        // that can be used.
+        //
+        if (argCount > paramCount)
+        {
+            return DeclRef<Decl>(nullptr, nullptr);
+        }
+
+        for (Index aa = 0; aa < argCount; ++aa)
+        {
+            // The question here is whether failure to "unify" an argument
+            // and parameter should lead to immediate failure.
+            //
+            // The case that is interesting is if we want to unify, say:
+            // `vector<float,N>` and `vector<int,3>`
+            //
+            // It is clear that we should solve with `N = 3`, and then
+            // a later step may find that the resulting types aren't
+            // actually a match.
+            //
+            // A more refined approach to "unification" could of course
+            // see that `int` can convert to `float` and use that fact.
+            // (and indeed we already use something like this to unify
+            // `float` and `vector<T,3>`)
+            //
+            // So the question is then whether a mismatch during the
+            // unification step should be taken as an immediate failure...
+
+            TryUnifyTypes(constraints, context.getArgTypeForInference(aa, this), innerParamTypes[aa]);
+        }
+
+        auto constraintSubst = TrySolveConstraintSystem(&constraints, genericDeclRef);
+        if (!constraintSubst)
+        {
+            // constraint solving failed
+            return DeclRef<Decl>(nullptr, nullptr);
+        }
+
+        // We can now construct a reference to the inner declaration using
+        // the solution to our constraints.
+        return DeclRef<Decl>(innerDecl, constraintSubst);
+    }
+
     void SemanticsVisitor::AddTypeOverloadCandidates(
         Type*            type,
         OverloadResolveContext&	context)
@@ -1420,6 +1487,57 @@ namespace Slang
                 candidate.item = LookupResultItem(baseFuncDeclRef);
 
                 AddOverloadCandidate(context, candidate);
+            }
+            else if (auto baseFuncGenericDeclRef = as<DeclRefExpr>(jvpExpr->baseFunction)->declRef.as<GenericDecl>())
+            {
+                // Case: __jvp(name-resolved-to-generic-decl)
+
+                // Get inner function
+                DeclRef<Decl> unspecializedInnerRef = DeclRef<Decl>(
+                    getInner(baseFuncGenericDeclRef),
+                    baseFuncGenericDeclRef.substitutions);
+                
+                // Pull parameter list of inner function.
+                auto funcType = getFuncType(this->getASTBuilder(), unspecializedInnerRef.as<CallableDecl>());
+
+                // Process func type to generate JVP func type.
+                auto jvpFuncType = as<FuncType>(processJVPFuncType(this->getASTBuilder(), funcType));
+
+                // Extract parameter list from processed type.
+                List<Type*> paramTypes;
+
+                for(UIndex ii = 0; ii < jvpFuncType->getParamCount(); ii++)
+                    paramTypes.add(jvpFuncType->getParamType(ii));
+                
+                // Try to infer generic arguments, based on the context
+                DeclRef<Decl> innerRef = SpecializeGenericForInnerTypes(
+                    baseFuncGenericDeclRef, 
+                    paramTypes,
+                    context);
+                
+                if (innerRef)
+                {
+                    OverloadCandidate candidate;
+                    candidate.flavor = OverloadCandidate::Flavor::Expr;
+                    
+                    // Note that we call processJVPFuncType() again here 
+                    // in order to process the specialized version of the original func type.
+                    // This could potentially be a declRef.substitute(jvpFuncType)
+                    //
+                    candidate.funcType = as<FuncType>(processJVPFuncType(
+                        this->getASTBuilder(),
+                        getFuncType(this->getASTBuilder(), innerRef.as<CallableDecl>())));
+                        
+                    candidate.resultType = candidate.funcType->getResultType();
+                    candidate.item = LookupResultItem(innerRef);
+
+                    AddOverloadCandidate(context, candidate);
+                }
+                else
+                {
+                    SLANG_UNEXPECTED("Could noot resolve generic candidate");
+                }
+
             }
             else if (auto origOverloadedType = as<OverloadGroupType>(jvpExpr->baseFunction->type))
             {
