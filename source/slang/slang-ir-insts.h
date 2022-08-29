@@ -546,7 +546,7 @@ struct IRJVPDerivativeReferenceDecoration : IRDecoration
     };
     IR_LEAF_ISA(JVPDerivativeReferenceDecoration)
 
-    IRFunc* getJVPFunc() { return as<IRFunc>(getOperand(0)); }
+    IRInst* getJVPFunc() { return getOperand(0); }
 };
 
 

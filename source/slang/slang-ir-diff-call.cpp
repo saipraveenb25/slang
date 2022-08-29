@@ -52,36 +52,38 @@ struct DerivativeCallProcessContext
     // the intstructions.
     void processDifferentiate(IRJVPDifferentiate* derivOfInst)
     {
-        IRFunc* jvpFunc = nullptr;
+        IRInst* jvpCallable = nullptr;
 
         // First get base function 
-        auto origFunc = derivOfInst->getBaseFn();
+        auto origCallable = derivOfInst->getBaseFn();
 
-        IRSpecialize* specialization = false;
+        IRSpecialize* specialization = nullptr;
 
         // If the base is a specialize inst, get the inner fn.
-        if (auto origSpecialize = as<IRSpecialize>(origFunc))
+        if (auto origSpecialize = as<IRSpecialize>(origCallable))
         {
             specialization = origSpecialize;
-            origFunc = origSpecialize->getBase();
+            origCallable = origSpecialize->getBase();
         }
 
         // We should have either a generic or a function reference on our hands.
-        SLANG_ASSERT(as<IRGeneric>(origFunc) || as<IRFunc>(origFunc));
+        SLANG_ASSERT(as<IRGeneric>(origCallable) || as<IRFunc>(origCallable));
 
         // Resolve the derivative function.
         //
         // Check for the 'JVPDerivativeReference' decorator on the
         // base function.
-        if (auto jvpRefDecorator = origFunc->findDecoration<IRJVPDerivativeReferenceDecoration>())
+        if (auto jvpRefDecorator = origCallable->findDecoration<IRJVPDerivativeReferenceDecoration>())
         {
-            jvpFunc = jvpRefDecorator->getJVPFunc();
+            jvpCallable = jvpRefDecorator->getJVPFunc();
         }
+
+        SLANG_ASSERT(jvpCallable);
 
         if (specialization)
         {
             // Replace the specialization target with the JVP func.
-            specialization->setOperand(0, jvpFunc);
+            specialization->setOperand(0, jvpCallable);
 
             // Then replace the JVPDifferentiate inst with the specialization.
             derivOfInst->replaceUsesWith(specialization);
@@ -90,7 +92,7 @@ struct DerivativeCallProcessContext
         {
             // Substitute all uses of the 'derivativeOf' operation 
             // with the resolved derivative function.
-            derivOfInst->replaceUsesWith(jvpFunc);
+            derivOfInst->replaceUsesWith(jvpCallable);
         }
 
         // Remove the 'derivativeOf' inst.

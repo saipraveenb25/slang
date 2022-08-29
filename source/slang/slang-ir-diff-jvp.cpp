@@ -203,8 +203,14 @@ struct DifferentiableTypeConformanceContext
             while (genericParam)
             {
                 SLANG_ASSERT(!as<IRTypeType>(genericParam->getDataType()));
+
+                if (tableIndex >= typeParams.getCount())
+                    break;
+
                 if (auto witnessTableType = as<IRWitnessTableType>(genericParam->getDataType()))
                 {
+                    // TODO(sai): Heavily flawed way to find the right witness table.
+                    // Rewrite this part
                     if (witnessTableType->getConformanceType() == differentiableInterfaceType)
                         witnessTableMap.Add(typeParams[tableIndex], genericParam);
                 }
@@ -361,7 +367,17 @@ struct JVPTranscriber
 
     void mapDifferentialInst(IRInst* origInst, IRInst* diffInst)
     {
-        instMapD.Add(origInst, diffInst);
+        if (hasDifferentialInst(origInst))
+        {
+            if (lookupDiffInst(origInst) != diffInst)
+            {
+                SLANG_UNEXPECTED("Inconsistent differential mappings");
+            }
+        }
+        else
+        {
+            instMapD.Add(origInst, diffInst);
+        }
     }
 
     void mapPrimalInst(IRInst* origInst, IRInst* primalInst)
@@ -457,19 +473,56 @@ struct JVPTranscriber
 
     IRType* differentiateType(IRBuilder* builder, IRType* origType)
     {
-        switch (origType->getOp())
+        if (auto ptrType = as<IRPtrTypeBase>(origType))
+            return builder->getPtrType(
+                origType->getOp(),
+                differentiateType(builder, ptrType->getValueType()));
+
+        // If there is an explicit primal version of this type in the local scope, load that
+        // otherwise use the original type. 
+        //
+        IRInst* primalType = lookupPrimalInst(origType, origType);
+        
+        switch (primalType->getOp())
         {
-            case kIROp_HalfType:
-            case kIROp_FloatType:
-            case kIROp_DoubleType:
-            case kIROp_VectorType:
-                return (IRType*)(diffConformanceContext->getDifferentialForType(builder, origType));
-            case kIROp_OutType:
-                return builder->getOutType(differentiateType(builder, as<IROutType>(origType)->getValueType()));
-            case kIROp_InOutType:
-                return builder->getInOutType(differentiateType(builder, as<IRInOutType>(origType)->getValueType()));
-            default:
-                return nullptr;
+        case kIROp_HalfType:
+        case kIROp_FloatType:
+        case kIROp_DoubleType:
+        case kIROp_VectorType:
+            return (IRType*)(diffConformanceContext->getDifferentialForType(builder, as<IRType>(primalType)));
+
+        case kIROp_Param:
+            if (as<IRTypeType>(primalType->getDataType()))
+                return (IRType*)(diffConformanceContext->getDifferentialForType(
+                    builder,
+                    (IRType*)primalType));
+            else if (as<IRWitnessTableType>(primalType->getDataType()))
+                return (IRType*)primalType;
+        
+        case kIROp_FuncType:
+            return differentiateFunctionType(builder, as<IRFuncType>(primalType));
+
+        case kIROp_OutType:
+            return builder->getOutType(differentiateType(builder, as<IROutType>(primalType)->getValueType()));
+
+        case kIROp_InOutType:
+            return builder->getInOutType(differentiateType(builder, as<IRInOutType>(primalType)->getValueType()));
+
+        case kIROp_TupleType:
+            {
+                auto tupleType = as<IRTupleType>(primalType);
+                List<IRType*> diffTypeList;
+                // TODO: what if we have type parameters here?
+                for (UIndex ii = 0; ii < tupleType->getOperandCount(); ii++)
+                    diffTypeList.add(
+                        differentiateType(builder, (IRType*)tupleType->getOperand(ii)));
+
+                return builder->getTupleType(diffTypeList);
+            }
+
+        default:
+            SLANG_UNEXPECTED("Cannot differentiate unhandled type");
+            return nullptr;
         }
     }
     
@@ -491,6 +544,7 @@ struct JVPTranscriber
 
     InstPair transcribeParam(IRBuilder* builder, IRParam* origParam)
     {
+        // Do not differentiate generic type (and witness table) parameters
         if (as<IRTypeType>(origParam->getDataType()) || as<IRWitnessTableType>(origParam->getDataType()))
         {
             return InstPair(
@@ -664,7 +718,6 @@ struct JVPTranscriber
         if (auto pairType = tryGetDiffPairType(builder, origReturnVal->getDataType()))
         {   
             IRInst* primalReturnVal = findOrTranscribePrimalInst(builder, origReturnVal);
-        
             IRInst* diffReturnVal = findOrTranscribeDiffInst(builder, origReturnVal);
             if(!diffReturnVal)
                 diffReturnVal = getZeroOfType(builder, origReturnVal->getDataType());
@@ -672,6 +725,20 @@ struct JVPTranscriber
             auto diffPair = builder->emitMakeDifferentialPair(pairType, primalReturnVal, diffReturnVal);
             IRReturn* pairReturn = as<IRReturn>(builder->emitReturn(diffPair));
             return InstPair(pairReturn, pairReturn);
+        }
+        else if (as<IRFunc>(origReturnVal) || as<IRGeneric>(origReturnVal) || as<IRStructType>(origReturnVal))
+        {
+            // If the return value is itself a function, generic or a struct then this
+            // is likely to be a generic scope. In this case, we lookup the differential
+            // and return that.
+            IRInst* primalReturnVal = findOrTranscribePrimalInst(builder, origReturnVal);
+            IRInst* diffReturnVal = findOrTranscribeDiffInst(builder, origReturnVal);
+            
+            // Neither of these should be nullptr.
+            SLANG_ASSERT(primalReturnVal && diffReturnVal);
+            IRReturn* diffReturn = as<IRReturn>(builder->emitReturn(diffReturnVal));
+
+            return InstPair(diffReturn, diffReturn);
         }
         else
         {
@@ -971,6 +1038,15 @@ struct JVPTranscriber
 
         auto oldLoc = builder->getInsertLoc();
 
+        // If this is a top-level function, there is no need to clone it
+        // since it is visible in all the scopes.
+        // Otherwise, we need to clone it in case of generic scopes.
+        // 
+        // TODO(sai): Is this the correct thing to do? Can a function cloned inside a 
+        // generic scope but is not the return value of that generic, be used within
+        // that scope? Or do we have to call out to the original generic specialized with
+        // the current generic params?
+        // 
         bool isTopLevelFunc = (as<IRModuleInst>(origFunc->parent) != nullptr);
         if (isTopLevelFunc)
         {
@@ -979,6 +1055,8 @@ struct JVPTranscriber
         }
         else
         {
+            // TODO(sai): this might never be called, and it might never make sense
+            // to call it either. Potentially remove this.
             primalFunc = as<IRFunc>(
                 cloneInst(&cloneEnv, builder, origFunc));
         }
@@ -1018,7 +1096,7 @@ struct JVPTranscriber
         auto oldLoc = builder->getInsertLoc();
         builder->setInsertBefore(origGeneric);
 
-        auto diffGeneric = builder->createGeneric();
+        auto diffGeneric = builder->emitGeneric();
         // TODO(sai): Should we set the type to GenericKind
 
         // TODO(sai): Replace naming scheme
@@ -1041,7 +1119,7 @@ struct JVPTranscriber
         // If a differential intstruction is already mapped for 
         // this original inst, return that.
         //
-        if (auto diffInst = lookupDiffInst(origInst))
+        if (auto diffInst = lookupDiffInst(origInst, nullptr))
         {
             SLANG_ASSERT(lookupPrimalInst(origInst)); // Consistency check.
             return diffInst;
@@ -1101,6 +1179,7 @@ struct JVPTranscriber
             return transcribeSwizzle(builder, as<IRSwizzle>(origInst));
         
         case kIROp_constructVectorFromScalar:
+        case kIROp_MakeTuple:
             return transcribeByPassthrough(builder, origInst);
 
         case kIROp_unconditionalBranch:
@@ -1258,7 +1337,7 @@ struct JVPDerivativeContext
                 {
                     auto baseInst = jvpDiffInst->getBaseFn();
 
-                    IRFunc* baseFunction = nullptr;
+                    IRGlobalValueWithCode* baseFunction = nullptr;
 
                     if (auto specializeInst = as<IRSpecialize>(baseInst))
                     {
@@ -1281,6 +1360,7 @@ struct JVPDerivativeContext
                         if (as<IRFunc>(baseFunction) || as<IRGeneric>(baseFunction))
                         {
                             IRInst* diffFunc = (&transcriberStorage)->transcribe(builder, baseFunction);
+                            SLANG_ASSERT(diffFunc);
                             builder->addJVPDerivativeReferenceDecoration(baseFunction, diffFunc);
                             workQueue->push(diffFunc);
                         } 

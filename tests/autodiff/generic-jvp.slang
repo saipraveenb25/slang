@@ -8,7 +8,7 @@ typedef __DifferentialPair<float> dpfloat;
 //typedef __DifferentialPair<double> dpdouble;
 //typedef __DifferentialPair<float3> dpfloat3;
 
-typealias __BuiltinDifferentiableFloatingPointType = __BuiltinFloatingPointType & IDifferentiable;
+typealias __BuiltinDifferentiableFloatingPointType = IDifferentiable & __BuiltinFloatingPointType;
 
 __generic<T : __BuiltinDifferentiableFloatingPointType>
 __differentiate_jvp T f(T x)
