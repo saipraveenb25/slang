@@ -1674,8 +1674,19 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
 
     IRType* visitBasicExpressionType(BasicExpressionType* type)
     {
-        return getBuilder()->getBasicType(
+        IRType* irType = getBuilder()->getBasicType(
             type->baseType);
+        
+        if (auto diffConfModifier = type->declRef.getDecl()->findModifier<DifferentiableTypeConformanceModifier>())
+        {
+            auto irWitness = lowerSimpleVal(context, diffConfModifier->witness);
+            if (!getBuilder()->findDifferentiableTypeEntry(irType))
+            {
+                getBuilder()->addDifferentiableTypeEntry(irType, irWitness);
+            }
+        }
+
+        return irType;
     }
 
     IRType* visitVectorExpressionType(VectorExpressionType* type)
@@ -1683,9 +1694,23 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         auto elementType = lowerType(context, type->elementType);
         auto elementCount = lowerSimpleVal(context, type->elementCount);
 
-        return getBuilder()->getVectorType(
+        IRType* irType = getBuilder()->getVectorType(
             elementType,
             elementCount);
+
+        if (auto diffConformanceModifier = type->declRef.getDecl()->findModifier<DifferentiableTypeConformanceModifier>())
+        {
+            // We lower the witness table _before_ checking for an exisitng type entry since the
+            // entries can be modified during the lowering process.
+            // 
+            IRInst* irWitnessTable = lowerSimpleVal(context, diffConformanceModifier->witness);
+            if (!getBuilder()->findDifferentiableTypeEntry(irType))
+            {
+                getBuilder()->addDifferentiableTypeEntry(irType, irWitnessTable);
+            }
+        }
+
+        return irType;
     }
 
     IRType* visitMatrixExpressionType(MatrixExpressionType* type)
@@ -6740,6 +6765,18 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             subBuilder->addDecoration(irAggType, kIROp_PayloadDecoration);
         }
 
+        if (auto diffConformanceModifier = decl->findModifier<DifferentiableTypeConformanceModifier>())
+        {
+            // We lower the witness table _before_ checking for an exisitng type entry since the
+            // entries can be modified during the lowering process.
+            // 
+            IRInst* irWitnessTable = lowerSimpleVal(context, diffConformanceModifier->witness);
+            if (!subBuilder->findDifferentiableTypeEntry(irAggType))
+            {
+                subBuilder->addDifferentiableTypeEntry(irAggType, irWitnessTable);
+            }
+        }
+
         subBuilder->setInsertInto(irAggType);
 
         // A `struct` that inherits from another `struct` must start
@@ -7004,6 +7041,27 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             }
         }
 
+        // Go back over the list of members and add decoration for any type parameters that
+        // are declared as differentiable. This is required for the auto-diff pass to be able
+        // to convenienetly access IDifferentiable interface methods.
+        // 
+        for (auto member : genericDecl->members)
+        {
+            if (auto typeParamDecl = as<GenericTypeParamDecl>(member))
+            {
+                if (auto diffTypeConf = typeParamDecl->findModifier<DifferentiableTypeConformanceModifier>())
+                {
+                    auto loweredType = subContext->findLoweredDecl(typeParamDecl)->val;
+                    auto loweredWitness = lowerSimpleVal(subContext, diffTypeConf->witness);
+
+                    if (!subBuilder->findDifferentiableTypeEntry(loweredType))
+                    {
+                        subBuilder->addDifferentiableTypeEntry(loweredType, loweredWitness);
+                    }
+                }
+            }
+        }
+
         return irGeneric;
     }
 
@@ -7157,6 +7215,10 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
                     {
                         markInstsToClone(valuesToClone, parentGeneric->getFirstBlock(), genericParam);
                     }
+                    
+                    // Add a differentiable type dictionary if necessary.
+                    if (auto diffTypeDict = subBuilder->findDifferentiableTypeDictionary(parentGeneric->getFirstBlock()))
+                        markInstsToClone(valuesToClone, parentGeneric->getFirstBlock(), diffTypeDict);
                 }
                 if (valuesToClone.Count() == 0)
                 {

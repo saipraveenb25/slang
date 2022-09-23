@@ -549,6 +549,14 @@ class AttributeTargetModifier : public Modifier
     SyntaxClass<NodeBase> syntaxClass;
 };
 
+class DifferentiableTypeConformanceModifier : public Modifier
+{
+    SLANG_AST_CLASS(DifferentiableTypeConformanceModifier)
+
+    // A witness that the modified type is a subtype of IDifferentiable.
+    SubtypeWitness* witness;
+};
+
 // Base class for checked and unchecked `[name(arg0, ...)]` style attribute.
 class AttributeBase : public Modifier 
 {

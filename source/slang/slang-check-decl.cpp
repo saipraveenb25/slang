@@ -1172,6 +1172,48 @@ namespace Slang
         }
     }
 
+    void SemanticsVisitor::tryAddDifferentiableConformanceModifier(Decl* decl)
+    {
+        // If the autodiff core library (diff.meta.slang) has not been loaded yet, ignore any
+        // request to check differentiable types.
+        // 
+        if (!m_astBuilder->isDifferentiableInterfaceAvailable())
+            return;
+
+        // If the conformance comes from an extension, we should operate on the original
+        // extension.
+        if (auto extensionDecl = as<ExtensionDecl>(decl))
+        {
+            if (auto targetDeclRefType = as<DeclRefType>(extensionDecl->targetType.type))
+            {
+                auto targetDecl = targetDeclRefType->declRef.getDecl();
+                decl = targetDecl;
+            }
+        }
+
+        auto declRef = makeDeclRef(decl);
+        auto declRefType = DeclRefType::create(m_astBuilder, declRef);
+
+        auto diffInterface = m_astBuilder->getDifferentiableInterface();
+
+        // Ignore the trivial case of when the decl we're looking at is actually
+        // the IDifferentiable interface itself. Constructing a reflexive witness
+        // can cause problems..
+        // 
+        if (declRef == diffInterface)
+            return;
+
+        auto witness = tryGetInterfaceConformanceWitness(declRefType, diffInterface);
+        if (auto subtypeWitness = as<SubtypeWitness>(witness))
+        {
+            auto diffConfModifier = m_astBuilder->create<DifferentiableTypeConformanceModifier>();
+            diffConfModifier->witness = subtypeWitness;
+
+            if (!decl->findModifier<DifferentiableTypeConformanceModifier>())
+                addModifier(decl, diffConfModifier);
+        }
+    }
+
     void SemanticsDeclHeaderVisitor::visitGenericTypeConstraintDecl(GenericTypeConstraintDecl* decl)
     {
         // TODO: are there any other validations we can do at this point?
@@ -1225,6 +1267,17 @@ namespace Slang
                 ensureDecl(constraint, DeclCheckState::ReadyForReference);
             }
         }
+
+        // TODO(sai): Is this the right checking stage to be doing this?
+        for (Index i = 0; i < members.getCount(); ++i)
+        {
+            Decl* m = members[i];
+
+            if (auto typeParam = as<GenericTypeParamDecl>(m))
+            {
+                tryAddDifferentiableConformanceModifier(typeParam);
+            }
+        }
     }
 
     void SemanticsDeclBasesVisitor::visitInheritanceDecl(InheritanceDecl* inheritanceDecl)
@@ -1260,6 +1313,7 @@ namespace Slang
         void visitAggTypeDecl(AggTypeDecl* aggTypeDecl)
         {
             checkAggTypeConformance(aggTypeDecl);
+            tryAddDifferentiableConformanceModifier(aggTypeDecl);
         }
 
         // Conformances can also come via `extension` declarations, and
@@ -1268,6 +1322,7 @@ namespace Slang
         void visitExtensionDecl(ExtensionDecl* extensionDecl)
         {
             checkExtensionConformance(extensionDecl);
+            tryAddDifferentiableConformanceModifier(extensionDecl);
         }
     };
 

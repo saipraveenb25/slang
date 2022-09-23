@@ -500,6 +500,19 @@ namespace Slang
             }
         }
 
+        // Two subtype witnesses can be unified if they exist (non-null) and 
+        // prove that some pair of types are subtypes of types that can be unified.
+        // 
+        if (auto fstWit = as<SubtypeWitness>(fst))
+        {
+            if (auto sndWit = as<SubtypeWitness>(snd))
+            {
+                return TryUnifyTypes(constraints,
+                    fstWit->sup,
+                    sndWit->sup);
+            }
+        }
+
         SLANG_UNIMPLEMENTED_X("value unification case");
 
         // default: fail

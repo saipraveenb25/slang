@@ -961,6 +961,11 @@ namespace Slang
             DeclRef<Decl>               requiredMemberDeclRef,
             RefPtr<WitnessTable>        witnessTable);
 
+            /// Add a DifferentiableTypeConformanceModifier to the provided declaration, if the declaration represents
+            /// a subtype of IDifferentable. Does nothing otherwise.
+        void tryAddDifferentiableConformanceModifier(
+            Decl* decl);
+
         // Find the appropriate member of a declared type to
         // satisfy a requirement of an interface the type
         // claims to conform to.
@@ -1209,6 +1214,23 @@ namespace Slang
             Type*            sub = nullptr;
             Type*            sup = nullptr;
             DeclRef<Decl>           declRef;
+
+            enum Flavor 
+            {
+                // Describes a sub-type super-type relationship through a 
+                // reference to an inhertiance declaration.
+                Decl,
+
+                // Describes a sub-type super-type relationship through 
+                // conjunction. This doesn't necessarily have a corresponding declaration
+                // since AndTypes cannot actually be used as types.
+                // i.e. if (A & B) subtype C because A subtype C, then we use AndTypeLeft to represent
+                // that relationship.
+                AndTypeLeft,
+                AndTypeRight
+            };
+
+            Flavor flavor = Decl;
         };
 
             // Create a subtype witness based on the declared relationship

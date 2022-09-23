@@ -565,6 +565,29 @@ struct IRJVPDifferentiate : IRInst
     IR_LEAF_ISA(JVPDifferentiate)
 };
 
+// Dictionary item mapping a type with a corresponding 
+// IDifferentiable witness table
+// 
+struct IRDifferentiableTypeDictionaryItem : IRInst
+{
+    IR_LEAF_ISA(DifferentiableTypeDictionaryItem)
+};
+
+// 
+struct IRDifferentiableConformanceDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_DifferentiableConformanceDecoration
+    };
+
+    // The witness table for the type's conformance to IDifferentiable.
+    IRUse witnessTable;
+    IRInst* getWitnessTable() { return getOperand(0); }
+
+    IR_LEAF_ISA(DifferentiableConformanceDecoration)
+};
+
 // An instruction that specializes another IR value
 // (representing a generic) to a particular set of generic arguments 
 // (instructions representing types, witness tables, etc.)
@@ -2411,6 +2434,25 @@ public:
 
     IRInst* emitMakeDifferentialPair(IRType* type, IRInst* primal, IRInst* differential);
 
+    // Emit and return a dictionary instruction to the global or generic scope.
+    IRInst* emitDifferentiableTypeDictionary();
+
+    // Emit and return a dictionary instruction to the global or generic scope,
+    // if one is not already present.
+    // 
+    IRInst* findOrEmitDifferentiableTypeDictionary();
+
+    // Returns the IRDifferentiableTypeDictionary in the scope of inst.
+    IRInst* findDifferentiableTypeDictionary(IRInst* inst);
+
+    // Add a differentiable type entry to the appropriate dictionary.
+    IRInst* addDifferentiableTypeEntry(IRInst* irType, IRInst* conformanceWitness);
+    
+    // Lookup a differentiable type entry in the appropriate dictionary.
+    // This recursively looks up in upper contexts.
+    // 
+    IRInst* findDifferentiableTypeEntry(IRInst* irType);
+
     IRInst* emitSpecializeInst(
         IRType*         type,
         IRInst*         genericVal,
@@ -3100,6 +3142,11 @@ public:
     void addJVPDerivativeReferenceDecoration(IRInst* value, IRInst* jvpFn)
     {
         addDecoration(value, kIROp_JVPDerivativeReferenceDecoration, jvpFn);
+    }
+
+    void addDifferentiableConformanceDecoration(IRInst* value, IRInst* witnessTable)
+    {
+        addDecoration(value, kIROp_DifferentiableConformanceDecoration, witnessTable);
     }
 
     void addCOMWitnessDecoration(IRInst* value, IRInst* witnessTable)
