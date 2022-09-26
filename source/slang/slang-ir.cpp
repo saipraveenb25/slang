@@ -3569,7 +3569,7 @@ namespace Slang
         return item;
     }
 
-    IRInst* _findDifferentiableTypeEntry(IRInst* irType, IRInst* scope)
+    IRInst* IRBuilder::findDifferentiableTypeEntry(IRInst* irType, IRInst* scope)
     {
         IRInst* diffTypeDict = nullptr;
         for (auto child = scope->getFirstChild(); child; child = child->getNextInst()) 
@@ -3606,7 +3606,7 @@ namespace Slang
 
         while (instScope)
         {
-            if (auto witness = _findDifferentiableTypeEntry(irType, instScope))
+            if (auto witness = findDifferentiableTypeEntry(irType, instScope))
             {
                 return witness;
             }

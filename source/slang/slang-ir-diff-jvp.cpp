@@ -68,14 +68,6 @@ struct DifferentiableTypeConformanceContext
                     isInterfaceAvailable = true;
             }
         }
-
-        if (isInterfaceAvailable)
-        {
-            // Load all witness tables corresponding to the IDifferentiable interface.
-            // loadWitnessTablesForInterface(differentiableInterfaceType);
-        }
-        
-        parseWitnessMap();
     }
 
     DifferentiableTypeConformanceContext(IRInst* inst) :
@@ -88,22 +80,15 @@ struct DifferentiableTypeConformanceContext
     IRInst* lookUpConformanceForType(IRBuilder* builder, IRInst* type)
     {
         SLANG_ASSERT(isInterfaceAvailable);
-
-        //if (auto irConfDecoration = type->findDecoration<IRDifferentiableConformanceDecoration>())
-        //{
-        //    return irConfDecoration->getWitnessTable();
-        //}
-        if (auto irWitness = builder->findDifferentiableTypeEntry(type))
+        // TODO: Cache the returned value to avoid repeatedly scanning through
+        // blocks looking for the type entries.
+        // 
+        if (auto irWitness = builder->findDifferentiableTypeEntry(type, type->getParent()))
         {
             return irWitness;
         }
 
-        if (witnessTableMap.ContainsKey(type))
-            return witnessTableMap[type];
-        else if (parent)
-            return parent->lookUpConformanceForType(builder, type);
-        else
-            return nullptr;
+        return nullptr;
     }
     
     // Lookup and return the 'Differential' type declared in the concrete type
@@ -113,7 +98,6 @@ struct DifferentiableTypeConformanceContext
     // 
     IRInst* getDifferentialForType(IRBuilder* builder, IRType* origType)
     {
-        SLANG_ASSERT(isInterfaceAvailable);
 
         if (auto conformance = lookUpConformanceForType(builder, origType))
         {
@@ -173,32 +157,6 @@ struct DifferentiableTypeConformanceContext
         }
 
         return nullptr;
-    }
-    
-    void parseWitnessMap()
-    {
-        IRInst* diffTypeDict = nullptr;
-        for (auto child = inst->getFirstChild(); child; child = child->getNextInst())
-        {
-            if (child->getOp() == kIROp_DifferentiableTypeDictionary)
-            {
-                // No duplicates should exist within the same container.
-                SLANG_ASSERT(diffTypeDict == nullptr);
-                diffTypeDict = child;
-            }
-        }
-
-        if (diffTypeDict)
-        {
-            for (auto entry = diffTypeDict->getFirstChild(); entry; entry = entry->getNextInst())
-            {
-                SLANG_ASSERT(entry->getOp() == kIROp_DifferentiableTypeDictionaryItem);
-                IRInst* irType = entry->getOperand(0);
-                IRInst* irConformanceWitness = entry->getOperand(1);
-
-                witnessTableMap.Add(irType, irConformanceWitness);
-            }
-        }
     }
 
     void loadWitnessTablesForInterface(IRInst* interfaceType)
@@ -542,20 +500,6 @@ struct DifferentialPairTypeBuilder
                 auto irSpecialize = builder->emitSpecializeInst(builder->getTypeKind(), genericDiffPair, 2, args);
 
                 return irSpecialize;
-
-                /*auto diffPairType = builder->createStructType();
-                generatedTypeList.add(diffPairType);
-
-                // Create a keys for the primal and differential fields.
-                IRStructKey* origKey = _getOrCreatePrimalStructKey(builder);
-                builder->addNameHintDecoration(origKey, UnownedTerminatedStringSlice("primal"));
-                builder->createStructField(diffPairType, origKey, origBaseType);
-
-                IRStructKey* diffKey = _getOrCreateDiffStructKey(builder);
-                builder->addNameHintDecoration(diffKey, UnownedTerminatedStringSlice("differential"));
-                builder->createStructField(diffPairType, diffKey, (IRType*)(diffBaseType));
-
-                return diffPairType;*/
             }
         }
         return nullptr;
@@ -1021,7 +965,7 @@ struct JVPTranscriber
             for (UIndex ii = 0; ii < operandCount; ii++)
             {
                 // If the operand has a differential version, replace the original with
-                // the differential. Otherwise use a zero.
+                // the differential. Otherwise, use a zero.
                 // 
                 if (auto diffInst = lookupDiffInst(origConstruct->getOperand(ii), nullptr))
                     diffOperands.add(diffInst);
@@ -1075,7 +1019,7 @@ struct JVPTranscriber
                 if (auto pairType = tryGetDiffPairType(builder, primalType))
                 {
                     
-                    auto diffArg = findOrTranscribeDiffInst(builder, primalArg);
+                    auto diffArg = findOrTranscribeDiffInst(builder, origArg);
 
                     // TODO(sai): This part is temporary. Replace with a call to the 
                     // 'zero()' interface method.
@@ -1697,34 +1641,33 @@ struct JVPDerivativeContext
         return true;
     }
 
-    IRInst* lowerPairType(IRBuilder* builder, IRType* type, DifferentiableTypeConformanceContext* diffContext)
+    IRInst* lowerPairType(IRBuilder* builder, IRType* type, DifferentiableTypeConformanceContext*)
     {
-        if (diffContext->isInterfaceAvailable)
+        
+        if (auto pairType = as<IRDifferentialPairType>(type))
         {
-            if (auto pairType = as<IRDifferentialPairType>(type))
-            {
-                builder->setInsertBefore(pairType);
+            builder->setInsertBefore(pairType);
 
-                auto diffPairStructType = (&pairBuilderStorage)->getOrCreateDiffPairType(
-                    builder,
-                    pairType->getValueType());
+            auto diffPairStructType = (&pairBuilderStorage)->getOrCreateDiffPairType(
+                builder,
+                pairType->getValueType());
 
-                pairType->replaceUsesWith(diffPairStructType);
-                pairType->removeAndDeallocate();
+            pairType->replaceUsesWith(diffPairStructType);
+            pairType->removeAndDeallocate();
 
-                return diffPairStructType;
-            }
-            else if (auto loweredStructType = as<IRStructType>(type))
-            {
-                // Already lowered to struct.
-                return loweredStructType;
-            }
-            else if (auto specializedStructType = as<IRSpecialize>(type))
-            {
-                // Already lowered to specialized struct.
-                return specializedStructType;
-            }
+            return diffPairStructType;
         }
+        else if (auto loweredStructType = as<IRStructType>(type))
+        {
+            // Already lowered to struct.
+            return loweredStructType;
+        }
+        else if (auto specializedStructType = as<IRSpecialize>(type))
+        {
+            // Already lowered to specialized struct.
+            return specializedStructType;
+        }
+        
         return nullptr;
     }
 

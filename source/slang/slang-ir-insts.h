@@ -573,20 +573,6 @@ struct IRDifferentiableTypeDictionaryItem : IRInst
     IR_LEAF_ISA(DifferentiableTypeDictionaryItem)
 };
 
-// 
-struct IRDifferentiableConformanceDecoration : IRDecoration
-{
-    enum
-    {
-        kOp = kIROp_DifferentiableConformanceDecoration
-    };
-
-    // The witness table for the type's conformance to IDifferentiable.
-    IRUse witnessTable;
-    IRInst* getWitnessTable() { return getOperand(0); }
-
-    IR_LEAF_ISA(DifferentiableConformanceDecoration)
-};
 
 // An instruction that specializes another IR value
 // (representing a generic) to a particular set of generic arguments 
@@ -2453,6 +2439,8 @@ public:
     // 
     IRInst* findDifferentiableTypeEntry(IRInst* irType);
 
+    IRInst* findDifferentiableTypeEntry(IRInst* irType, IRInst* scope);
+
     IRInst* emitSpecializeInst(
         IRType*         type,
         IRInst*         genericVal,
@@ -3142,11 +3130,6 @@ public:
     void addJVPDerivativeReferenceDecoration(IRInst* value, IRInst* jvpFn)
     {
         addDecoration(value, kIROp_JVPDerivativeReferenceDecoration, jvpFn);
-    }
-
-    void addDifferentiableConformanceDecoration(IRInst* value, IRInst* witnessTable)
-    {
-        addDecoration(value, kIROp_DifferentiableConformanceDecoration, witnessTable);
     }
 
     void addCOMWitnessDecoration(IRInst* value, IRInst* witnessTable)

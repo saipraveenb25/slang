@@ -1177,42 +1177,6 @@ namespace Slang
         // If the autodiff core library (diff.meta.slang) has not been loaded yet, ignore any
         // request to check differentiable types.
         // 
-        /*if (!m_astBuilder->isDifferentiableInterfaceAvailable())
-            return;
-
-        // If the conformance comes from an extension, we should operate on the original
-        // extension.
-        if (auto extensionDecl = as<ExtensionDecl>(decl))
-        {
-            if (auto targetDeclRefType = as<DeclRefType>(extensionDecl->targetType.type))
-            {
-                auto targetDecl = targetDeclRefType->declRef.getDecl();
-                decl = targetDecl;
-            }
-        }
-
-        auto declRef = makeDeclRef(decl);
-        auto declRefType = DeclRefType::create(m_astBuilder, declRef);
-
-        auto diffInterface = m_astBuilder->getDifferentiableInterface();
-
-        // Ignore the trivial case of when the decl we're looking at is actually
-        // the IDifferentiable interface itself. Constructing a reflexive witness
-        // can cause problems..
-        // 
-        if (declRef == diffInterface)
-            return;
-
-        auto witness = tryGetInterfaceConformanceWitness(declRefType, diffInterface);
-        if (auto subtypeWitness = as<SubtypeWitness>(witness))
-        {
-            auto diffConfModifier = m_astBuilder->create<DifferentiableTypeConformanceModifier>();
-            diffConfModifier->witness = subtypeWitness;
-
-            if (!decl->findModifier<DifferentiableTypeConformanceModifier>())
-                addModifier(decl, diffConfModifier);
-        }*/
-        
         if (!m_astBuilder->isDifferentiableInterfaceAvailable())
             return;
         
@@ -1234,6 +1198,7 @@ namespace Slang
             type = DeclRefType::create(m_astBuilder, declRef);
         }
 
+        // Skip if the declaration is the interface itself.
         if (type->declRef == diffInterface)
             return;
 

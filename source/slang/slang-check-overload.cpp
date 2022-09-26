@@ -1488,6 +1488,34 @@ namespace Slang
 
                 AddOverloadCandidate(context, candidate);
             }
+            else if (auto origOverloadedType = as<OverloadGroupType>(jvpExpr->baseFunction->type))
+            {
+                // Case: __jvp(name-resolved-to-multiple-decl-ref)
+
+                if (auto overloadExpr = as<OverloadedExpr>(jvpExpr->baseFunction))
+                {
+                    for (auto item : overloadExpr->lookupResult2.items)
+                    {
+                        OverloadCandidate candidate;
+                        candidate.flavor = OverloadCandidate::Flavor::Expr;
+                        candidate.funcType = as<FuncType>(processJVPFuncType(
+                            this->getASTBuilder(),
+                            as<FuncType>(GetTypeForDeclRef(item.declRef, item.declRef.decl->loc))));
+                        candidate.resultType = candidate.funcType->getResultType();
+                        candidate.item = LookupResultItem(item.declRef);
+
+                        AddOverloadCandidate(context, candidate);
+                    }
+                }
+                else
+                {
+                    // Unhandled overload expr.    
+                    funcExpr->type = this->getASTBuilder()->getErrorType();
+                    getSink()->diagnose(funcExpr->loc,
+                        Diagnostics::unimplemented,
+                        funcExpr->type);
+                }
+            }
             else if (auto baseFuncGenericDeclRef = as<DeclRefExpr>(jvpExpr->baseFunction)->declRef.as<GenericDecl>())
             {
                 // Case: __jvp(name-resolved-to-generic-decl)
@@ -1538,34 +1566,6 @@ namespace Slang
                     SLANG_UNEXPECTED("Could noot resolve generic candidate");
                 }
 
-            }
-            else if (auto origOverloadedType = as<OverloadGroupType>(jvpExpr->baseFunction->type))
-            {
-                // Case: __jvp(name-resolved-to-multiple-decl-ref)
-
-                if (auto overloadExpr = as<OverloadedExpr>(jvpExpr->baseFunction))
-                {
-                    for (auto item : overloadExpr->lookupResult2.items)
-                    {
-                        OverloadCandidate candidate;
-                        candidate.flavor = OverloadCandidate::Flavor::Expr;
-                        candidate.funcType = as<FuncType>(processJVPFuncType(
-                            this->getASTBuilder(),
-                            as<FuncType>(GetTypeForDeclRef(item.declRef, item.declRef.decl->loc))));
-                        candidate.resultType = candidate.funcType->getResultType();
-                        candidate.item = LookupResultItem(item.declRef);
-
-                        AddOverloadCandidate(context, candidate);
-                    }
-                }
-                else
-                {
-                    // Unhandled overload expr.    
-                    funcExpr->type = this->getASTBuilder()->getErrorType();
-                    getSink()->diagnose(funcExpr->loc,
-                        Diagnostics::unimplemented,
-                        funcExpr->type);
-                }
             }
             else
             {

@@ -1676,15 +1676,6 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
     {
         IRType* irType = getBuilder()->getBasicType(
             type->baseType);
-        
-        if (auto diffConfModifier = type->declRef.getDecl()->findModifier<DifferentiableTypeConformanceModifier>())
-        {
-            auto irWitness = lowerSimpleVal(context, diffConfModifier->witness);
-            if (!getBuilder()->findDifferentiableTypeEntry(irType))
-            {
-                getBuilder()->addDifferentiableTypeEntry(irType, irWitness);
-            }
-        }
 
         return irType;
     }
@@ -1697,18 +1688,6 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         IRType* irType = getBuilder()->getVectorType(
             elementType,
             elementCount);
-
-        if (auto diffConformanceModifier = type->declRef.getDecl()->findModifier<DifferentiableTypeConformanceModifier>())
-        {
-            // We lower the witness table _before_ checking for an exisitng type entry since the
-            // entries can be modified during the lowering process.
-            // 
-            IRInst* irWitnessTable = lowerSimpleVal(context, diffConformanceModifier->witness);
-            if (!getBuilder()->findDifferentiableTypeEntry(irType))
-            {
-                getBuilder()->addDifferentiableTypeEntry(irType, irWitnessTable);
-            }
-        }
 
         return irType;
     }
@@ -6799,18 +6778,6 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             subBuilder->addDecoration(irAggType, kIROp_PayloadDecoration);
         }
 
-        if (auto diffConformanceModifier = decl->findModifier<DifferentiableTypeConformanceModifier>())
-        {
-            // We lower the witness table _before_ checking for an exisitng type entry since the
-            // entries can be modified during the lowering process.
-            // 
-            IRInst* irWitnessTable = lowerSimpleVal(context, diffConformanceModifier->witness);
-            if (!subBuilder->findDifferentiableTypeEntry(irAggType))
-            {
-                subBuilder->addDifferentiableTypeEntry(irAggType, irWitnessTable);
-            }
-        }
-
         subBuilder->setInsertInto(irAggType);
 
         // A `struct` that inherits from another `struct` must start
@@ -7080,32 +7047,11 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             if (auto diffTypeDict = as<DifferentiableTypeDictionary>(member))
             {
                 // We directly use lowerDecl() instead of ensureDecl() to emit to
-                // the current generic block instead of the upper module.
+                // the current generic block instead of the top-level module.
                 // 
                 lowerDecl(subContext, diffTypeDict);
             }
         }
-
-        // Go back over the list of members and add decoration for any type parameters that
-        // are declared as differentiable. This is required for the auto-diff pass to be able
-        // to convenienetly access IDifferentiable interface methods.
-        // 
-        /* for (auto member : genericDecl->members)
-        {
-            if (auto typeParamDecl = as<GenericTypeParamDecl>(member))
-            {
-                if (auto diffTypeConf = typeParamDecl->findModifier<DifferentiableTypeConformanceModifier>())
-                {
-                    auto loweredType = subContext->findLoweredDecl(typeParamDecl)->val;
-                    auto loweredWitness = lowerSimpleVal(subContext, diffTypeConf->witness);
-
-                    if (!subBuilder->findDifferentiableTypeEntry(loweredType))
-                    {
-                        subBuilder->addDifferentiableTypeEntry(loweredType, loweredWitness);
-                    }
-                }
-            }
-        }*/
 
         return irGeneric;
     }

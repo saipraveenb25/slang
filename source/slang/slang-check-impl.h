@@ -1001,12 +1001,14 @@ namespace Slang
             DeclRef<Decl>               requiredMemberDeclRef,
             RefPtr<WitnessTable>        witnessTable);
 
-            /// Add a DifferentiableTypeConformanceModifier to the provided declaration, if the declaration represents
+            /// Registers a type as differentiable in the currrent semantic context, if the declaration represents
             /// a subtype of IDifferentable. Does nothing otherwise.
         void tryAddDifferentiableConformanceToContext(
             Decl* decl,
             DifferentiableTypeSemanticContext* context);
 
+            /// Generates a dictionary node for the module with all registered differentiable types,
+            /// as well as information about differentiable types in imported modules.
         void finishDifferentiableTypeDictionary(ModuleDecl* moduleDecl);
 
         // Find the appropriate member of a declared type to

@@ -698,9 +698,6 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
         /// generated derivative function.
     INST(JVPDerivativeReferenceDecoration, jvpFnReference, 1, 0)
 
-        /// Hold the appropriate witness table for differentiable types
-    INST(DifferentiableConformanceDecoration, diffConformance, 1, 0)
-
         /// Marks a class type as a COM interface implementation, which enables
         /// the witness table to be easily picked up by emit.
     INST(COMWitnessDecoration, COMWitnessDecoration, 1, 0)
