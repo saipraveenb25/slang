@@ -1172,12 +1172,12 @@ namespace Slang
         }
     }
 
-    void SemanticsVisitor::tryAddDifferentiableConformanceModifier(Decl* decl)
+    void SemanticsVisitor::tryAddDifferentiableConformanceToContext(Decl* decl, DifferentiableTypeSemanticContext* context)
     {
         // If the autodiff core library (diff.meta.slang) has not been loaded yet, ignore any
         // request to check differentiable types.
         // 
-        if (!m_astBuilder->isDifferentiableInterfaceAvailable())
+        /*if (!m_astBuilder->isDifferentiableInterfaceAvailable())
             return;
 
         // If the conformance comes from an extension, we should operate on the original
@@ -1211,7 +1211,40 @@ namespace Slang
 
             if (!decl->findModifier<DifferentiableTypeConformanceModifier>())
                 addModifier(decl, diffConfModifier);
+        }*/
+        
+        if (!m_astBuilder->isDifferentiableInterfaceAvailable())
+            return;
+        
+        auto diffInterface = m_astBuilder->getDifferentiableInterface();
+
+        DeclRefType* type = nullptr;
+
+        if (auto extensionDecl = as<ExtensionDecl>(decl))
+        {
+            // If this is an extension, use the provided target type.
+            type = as<DeclRefType>(extensionDecl->targetType.type);
         }
+        else
+        {
+            // If this is a type declaration, create a decl ref without
+            // any substitutions.
+            // 
+            auto declRef = makeDeclRef(decl);
+            type = DeclRefType::create(m_astBuilder, declRef);
+        }
+
+        if (type->declRef == diffInterface)
+            return;
+
+        // If the DeclRefType conforms to IDifferentiable, register it with the top-level 
+        // context.
+        // 
+        if (auto witness = as<SubtypeWitness>(tryGetInterfaceConformanceWitness(type, diffInterface)))
+        {
+            context->registerDifferentiableType(type, witness);
+        }
+
     }
 
     void SemanticsDeclHeaderVisitor::visitGenericTypeConstraintDecl(GenericTypeConstraintDecl* decl)
@@ -1269,15 +1302,21 @@ namespace Slang
         }
 
         // TODO(sai): Is this the right checking stage to be doing this?
+        DifferentiableTypeSemanticContext diffTypeContext;
+        
         for (Index i = 0; i < members.getCount(); ++i)
         {
             Decl* m = members[i];
 
             if (auto typeParam = as<GenericTypeParamDecl>(m))
             {
-                tryAddDifferentiableConformanceModifier(typeParam);
+                tryAddDifferentiableConformanceToContext(typeParam, &diffTypeContext);
             }
         }
+        
+        auto diffTypeDictionaryNode = diffTypeContext.makeDifferentiableTypeDictionaryNode(m_astBuilder);
+        diffTypeDictionaryNode->parentDecl = genericDecl;
+        genericDecl->members.add(diffTypeDictionaryNode);
     }
 
     void SemanticsDeclBasesVisitor::visitInheritanceDecl(InheritanceDecl* inheritanceDecl)
@@ -1313,7 +1352,7 @@ namespace Slang
         void visitAggTypeDecl(AggTypeDecl* aggTypeDecl)
         {
             checkAggTypeConformance(aggTypeDecl);
-            tryAddDifferentiableConformanceModifier(aggTypeDecl);
+            tryAddDifferentiableConformanceToContext(aggTypeDecl, getShared()->getDiffTypeContext());
         }
 
         // Conformances can also come via `extension` declarations, and
@@ -1322,7 +1361,7 @@ namespace Slang
         void visitExtensionDecl(ExtensionDecl* extensionDecl)
         {
             checkExtensionConformance(extensionDecl);
-            tryAddDifferentiableConformanceModifier(extensionDecl);
+            tryAddDifferentiableConformanceToContext(extensionDecl, getShared()->getDiffTypeContext());
         }
     };
 
@@ -1479,6 +1518,31 @@ namespace Slang
         // Furthermore, because a fully checked function will have checked
         // its body, this also means that all function bodies and the
         // declarations they contain should be fully checked.
+
+        // Generate a dictionary node to hold information about all
+        // available differentiable types in scope (including imports and stdlib)
+        // 
+        finishDifferentiableTypeDictionary(moduleDecl);
+    }
+
+    void SemanticsVisitor::finishDifferentiableTypeDictionary(ModuleDecl* moduleDecl)
+    {
+        // Grab the differentiable type information from imported modules.
+        for(auto importedModule : getShared()->importedModulesList)
+        {
+            this->getShared()->getDiffTypeContext()->addImportedModule(importedModule);
+        }
+        
+        // Grad the differentiable type information from the standard library modules.
+        for (auto stdLibModule : this->getSession()->stdlibModules)
+        {
+            this->getShared()->getDiffTypeContext()->addImportedModule(stdLibModule->getModuleDecl());
+        }
+
+        auto diffTypeDictNode = this->getShared()->getDiffTypeContext()->makeDifferentiableTypeDictionaryNode(m_astBuilder);
+        diffTypeDictNode->parentDecl = moduleDecl;
+        
+        moduleDecl->members.add(diffTypeDictNode);
     }
 
     bool SemanticsVisitor::doesSignatureMatchRequirement(
@@ -5450,6 +5514,60 @@ namespace Slang
         //
         m_candidateExtensionListsBuilt = false;
         m_mapTypeDeclToCandidateExtensions.Clear();
+    }
+    
+    void DifferentiableTypeSemanticContext::registerDifferentiableType(DeclRefType* type, SubtypeWitness* witness)
+    {
+        m_mapTypeToIDifferentiableWitness.AddIfNotExists(type, witness);
+    }
+
+    List<KeyValuePair<DeclRefType*, SubtypeWitness*>> DifferentiableTypeSemanticContext::getDifferentiableTypeConformanceList()
+    {
+        List<KeyValuePair<DeclRefType*, SubtypeWitness*>> diffConformances;
+        for (auto entry : m_mapTypeToIDifferentiableWitness)
+        {
+            diffConformances.add(entry);
+        }
+
+        return diffConformances;
+    }
+
+    DifferentiableTypeDictionary* DifferentiableTypeSemanticContext::makeDifferentiableTypeDictionaryNode(
+        ASTBuilder* builder)
+    {
+        auto dictionary = builder->create<DifferentiableTypeDictionary>();
+
+        for (auto item : m_mapTypeToIDifferentiableWitness)
+        {
+            auto entry = builder->create<DifferentiableTypeDictionaryItem>();
+            entry->baseType = item.Key;
+            entry->confWitness = item.Value;
+            entry->parentDecl = dictionary;
+
+            dictionary->members.add(entry);
+        }
+
+        for (auto item : m_importedDictionaries)
+        {
+            auto entry = builder->create<DifferentiableTypeDictionaryImportItem>();
+            entry->dictionaryRef = item;
+            entry->parentDecl = dictionary;
+
+            dictionary->members.add(entry);
+        }
+
+        return dictionary;
+    }
+
+    void DifferentiableTypeSemanticContext::addImportedModule(ModuleDecl* importedModuleDecl)
+    {
+        // TODO: This is a terribly slow way to find the diff type dictionary. 
+        // Switch to lookUp() when possible (this might involve naming the dictionary something)
+        // 
+        for (auto diffTypeDict : importedModuleDecl->getMembersOfType<DifferentiableTypeDictionary>())
+        {
+            m_importedDictionaries.add(makeDeclRef(diffTypeDict));
+        }
     }
 
     void SharedSemanticsContext::_addCandidateExtensionsFromModule(ModuleDecl* moduleDecl)
