@@ -170,6 +170,12 @@ bool canInstHaveSideEffectAtAddress(IRGlobalValueWithCode* func, IRInst* inst, I
 
 IRInst* getUndefInst(IRBuilder builder, IRModule* module);
 
+// Set IRBuilder to insert before `inst`. If `inst` is a param, it will insert after the last param.
+void setInsertBeforeOrdinaryInst(IRBuilder* builder, IRInst* inst);
+
+// Set IRBuilder to insert after `inst`. If `inst` is a param, it will insert after the last param.
+void setInsertAfterOrdinaryInst(IRBuilder* builder, IRInst* inst);
+
 }
 
 #endif
