@@ -170,6 +170,9 @@ bool canInstHaveSideEffectAtAddress(IRGlobalValueWithCode* func, IRInst* inst, I
 
 IRInst* getUndefInst(IRBuilder builder, IRModule* module);
 
+// The the equivalent op of (a op b) in (b op' a). For example, a > b is equivalent to b < a. So (<) ==> (>).
+IROp getSwapSideComparisonOp(IROp op);
+
 // Set IRBuilder to insert before `inst`. If `inst` is a param, it will insert after the last param.
 void setInsertBeforeOrdinaryInst(IRBuilder* builder, IRInst* inst);
 

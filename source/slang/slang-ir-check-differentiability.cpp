@@ -346,6 +346,33 @@ public:
                 }
             }
         }
+
+        // Make sure all loops are marked with either [MaxIters] or [ForceUnroll].
+        for (auto block : funcInst->getBlocks())
+        {
+            auto loop = as<IRLoop>(block->getTerminator());
+            if (!loop)
+                continue;
+            bool hasBackEdge = false;
+            for (auto use = loop->getTargetBlock()->firstUse; use; use = use->nextUse)
+            {
+                if (use->getUser() != loop)
+                {
+                    hasBackEdge = true;
+                    break;
+                }
+            }
+            if (!hasBackEdge)
+                continue;
+            if (loop->findDecoration<IRLoopMaxItersDecoration>() || loop->findDecoration<IRForceUnrollDecoration>())
+            {
+                // We are good.
+            }
+            else
+            {
+                sink->diagnose(loop->sourceLoc, Diagnostics::loopInDiffFuncRequireUnrollOrMaxIters);
+            }
+        }
     }
 
     void processModule()
