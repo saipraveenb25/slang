@@ -96,9 +96,6 @@ bool tracePath(uint pathID, out PathState path, inout PathResult pathRes)
 {
     generatePath(pathID, path);
 
-    float thp = pathRes.thp;
-    float L = pathRes.L;
-
     [ForceUnroll]
     for (int i = 0; i < 3; ++i)
     {
