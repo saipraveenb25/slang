@@ -36,7 +36,7 @@ float tracePath()
         {
             thp = thp * bsdf();
 
-            L = thp * 1.0;
+            L = thp * 4.0;
 
             if (depth >= 2) break;
 
@@ -55,6 +55,6 @@ float tracePath()
 void computeMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
     {
-        __bwd_diff(tracePath)(1.0); // Expect: 1.0 in outputBuffer[0]
+        __bwd_diff(tracePath)(1.0); // Expect: 4 * (3 * 0.5 * 0.5) = 3.0 in outputBuffer[0]
     }
 }
