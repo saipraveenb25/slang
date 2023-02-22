@@ -1545,119 +1545,117 @@ static LegalVal legalizeGetElementPtr(
         indexOperand);
 }
 
-static LegalVal legalizeMakeStruct(
-    IRTypeLegalizationContext*  context,
+static LegalVal legalizeMakeComposite(
+    IRTypeLegalizationContext* context,
     LegalType                   legalType,
-    LegalVal const*             legalArgs,
-    UInt                        argCount)
+    LegalVal const* legalArgs,
+    UInt                        argCount,
+    IROp constructOp)
 {
     auto builder = context->builder;
 
-    switch(legalType.flavor)
+    switch (legalType.flavor)
     {
     case LegalType::Flavor::none:
         return LegalVal();
 
     case LegalType::Flavor::simple:
+    {
+        List<IRInst*> args;
+        for (UInt aa = 0; aa < argCount; ++aa)
         {
-            List<IRInst*> args;
-            for(UInt aa = 0; aa < argCount; ++aa)
-            {
-                // Ignore none values.
-                if (legalArgs[aa].flavor == LegalVal::Flavor::none)
-                    continue;
+            if (legalArgs[aa].flavor == LegalVal::Flavor::none)
+                continue;
 
-                // Note: we assume that all the arguments
-                // must be simple here, because otherwise
-                // the `struct` type with them as fields
-                // would not be simple...
-                //
-                args.add(legalArgs[aa].getSimple());
-            }
-            return LegalVal::simple(
-                builder->emitMakeStruct(
-                    legalType.getSimple(),
-                    args.getCount(),
-                    args.getBuffer()));
+            args.add(legalArgs[aa].getSimple());
         }
+        return LegalVal::simple(
+            builder->emitIntrinsicInst(
+                legalType.getSimple(),
+                constructOp,
+                args.getCount(),
+                args.getBuffer()));
+    }
 
     case LegalType::Flavor::pair:
+    {
+        // There are two sides, the ordinary and the special,
+        // and we basically just dispatch to both of them.
+        auto pairType = legalType.getPair();
+        auto pairInfo = pairType->pairInfo;
+        LegalType ordinaryType = pairType->ordinaryType;
+        LegalType specialType = pairType->specialType;
+
+        List<LegalVal> ordinaryArgs;
+        List<LegalVal> specialArgs;
+        UInt argCounter = 0;
+        for (auto ee : pairInfo->elements)
         {
-            // There are two sides, the ordinary and the special,
-            // and we basically just dispatch to both of them.
-            auto pairType = legalType.getPair();
-            auto pairInfo = pairType->pairInfo;
-            LegalType ordinaryType = pairType->ordinaryType;
-            LegalType specialType = pairType->specialType;
+            UInt argIndex = argCounter++;
+            LegalVal arg = legalArgs[argIndex];
 
-            List<LegalVal> ordinaryArgs;
-            List<LegalVal> specialArgs;
-            UInt argCounter = 0;
-            for(auto ee : pairInfo->elements)
+            if (arg.flavor == LegalVal::Flavor::pair)
             {
-                UInt argIndex = argCounter++;
-                LegalVal arg = legalArgs[argIndex];
-
-                if( arg.flavor == LegalVal::Flavor::pair )
-                {
-                    // The argument is itself a pair
-                    auto argPair = arg.getPair();
-                    ordinaryArgs.add(argPair->ordinaryVal);
-                    specialArgs.add(argPair->specialVal);
-                }
-                else if(ee.flags & Slang::PairInfo::kFlag_hasOrdinary)
-                {
-                    ordinaryArgs.add(arg);
-                }
-                else if(ee.flags & Slang::PairInfo::kFlag_hasSpecial)
-                {
-                    specialArgs.add(arg);
-                }
+                // The argument is itself a pair
+                auto argPair = arg.getPair();
+                ordinaryArgs.add(argPair->ordinaryVal);
+                specialArgs.add(argPair->specialVal);
             }
-
-            LegalVal ordinaryVal = legalizeMakeStruct(
-                context,
-                ordinaryType,
-                ordinaryArgs.getBuffer(),
-                ordinaryArgs.getCount());
-
-            LegalVal specialVal = legalizeMakeStruct(
-                context,
-                specialType,
-                specialArgs.getBuffer(),
-                specialArgs.getCount());
-
-            return LegalVal::pair(ordinaryVal, specialVal, pairInfo);
+            else if (ee.flags & Slang::PairInfo::kFlag_hasOrdinary)
+            {
+                ordinaryArgs.add(arg);
+            }
+            else if (ee.flags & Slang::PairInfo::kFlag_hasSpecial)
+            {
+                specialArgs.add(arg);
+            }
         }
-        break;
+
+        LegalVal ordinaryVal = legalizeMakeComposite(
+            context,
+            ordinaryType,
+            ordinaryArgs.getBuffer(),
+            ordinaryArgs.getCount(),
+            constructOp);
+
+        LegalVal specialVal = legalizeMakeComposite(
+            context,
+            specialType,
+            specialArgs.getBuffer(),
+            specialArgs.getCount(),
+            constructOp);
+
+        return LegalVal::pair(ordinaryVal, specialVal, pairInfo);
+    }
+    break;
 
     case LegalType::Flavor::tuple:
+    {
+        // We are constructing a tuple of values from
+        // the individual fields. We need to identify
+        // for each tuple element what field it uses,
+        // and then extract that field's value.
+
+        auto tupleType = legalType.getTuple();
+
+        RefPtr<TuplePseudoVal> resTupleInfo = new TuplePseudoVal();
+        UInt argCounter = 0;
+        for (auto typeElem : tupleType->elements)
         {
-            // We are constructing a tuple of values from
-            // the individual fields. We need to identify
-            // for each tuple element what field it uses,
-            // and then extract that field's value.
+            auto elemKey = typeElem.key;
+            UInt argIndex = argCounter++;
+            SLANG_ASSERT(argIndex < argCount);
 
-            auto tupleType = legalType.getTuple();
+            LegalVal argVal = legalArgs[argIndex];
 
-            RefPtr<TuplePseudoVal> resTupleInfo = new TuplePseudoVal();
-            UInt argCounter = 0;
-            for(auto typeElem : tupleType->elements)
-            {
-                auto elemKey = typeElem.key;
-                UInt argIndex = argCounter++;
-                SLANG_ASSERT(argIndex < argCount);
+            TuplePseudoVal::Element resElem;
+            resElem.key = elemKey;
+            resElem.val = argVal;
 
-                LegalVal argVal = legalArgs[argIndex];
-
-                TuplePseudoVal::Element resElem;
-                resElem.key = elemKey;
-                resElem.val = argVal;
-
-                resTupleInfo->elements.add(resElem);
-            }
-            return LegalVal::tuple(resTupleInfo);
+            resTupleInfo->elements.add(resElem);
         }
+        return LegalVal::tuple(resTupleInfo);
+    }
 
     default:
         SLANG_UNEXPECTED("unhandled");
@@ -1757,11 +1755,14 @@ static LegalVal legalizeInst(
     case kIROp_Return:
         return legalizeRetVal(context, args[0], (IRReturn*)inst);
     case kIROp_MakeStruct:
-        return legalizeMakeStruct(
+    case kIROp_MakeArray:
+    case kIROp_MakeArrayFromElement:
+        return legalizeMakeComposite(
             context,
             type,
             args.getBuffer(),
-            inst->getOperandCount());
+            inst->getOperandCount(),
+            inst->getOp());
     case kIROp_DefaultConstruct:
         return legalizeDefaultConstruct(
             context,
