@@ -752,7 +752,26 @@ static LegalVal legalizeUnconditionalBranch(
                 SLANG_UNIMPLEMENTED_X("Unknown legalized val flavor.");
         }
     }
-    context->builder->emitBranch(branchInst->getTargetBlock(), newArgs.getCount() - 1, newArgs.getBuffer() + 1);
+    
+    switch (branchInst->getOp())
+    {
+        case kIROp_unconditionalBranch:
+            context->builder->emitBranch(
+                branchInst->getTargetBlock(),
+                newArgs.getCount() - 1,
+                newArgs.getBuffer() + 1);
+            break;
+        
+        case kIROp_loop:
+            context->builder->emitLoop(
+                as<IRLoop>(branchInst)->getTargetBlock(),
+                as<IRLoop>(branchInst)->getBreakBlock(),
+                as<IRLoop>(branchInst)->getContinueBlock(),
+                newArgs.getCount() - 3,
+                newArgs.getBuffer() + 3);
+            break;
+    }
+    
     return LegalVal();
 }
 
@@ -1768,6 +1787,7 @@ static LegalVal legalizeInst(
             context,
             type);
     case kIROp_unconditionalBranch:
+    case kIROp_loop:
         return legalizeUnconditionalBranch(context, args, (IRUnconditionalBranch*)inst);
     case kIROp_undefined:
         return LegalVal();
