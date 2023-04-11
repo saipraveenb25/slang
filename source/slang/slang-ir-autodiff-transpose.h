@@ -85,6 +85,22 @@ struct DiffTransposePass
         // are split across the primal and differential blocks.
         // 
         HoistedPrimalsInfo* hoistedPrimalsInfo;
+
+        // Checkpoint policy instance for this func. 
+        // TODO: we might want to use a global instance for this.
+        // but that should be an easy fix later.
+        RefPtr<AutodiffCheckpointPolicyBase> chkPolicy;
+
+
+        // Indexed region information about the function.
+        // This essentially maps the counter variables in 
+        // the primal loops and differential loops so that
+        // during the variable hoisting phase, we can read/write 
+        // arrays using the right indices.
+        // TODO: This can eventually be removed once we remove
+        // the index generation at the unzipping stage.
+        List<IndexTrackingInfo*> indexRegionInfo; 
+
     };
 
     struct PendingBlockTerminatorEntry
@@ -687,8 +703,22 @@ struct DiffTransposePass
         //
         for (auto block : workList)
             block->removeFromParent();
+        
+        // Run the three checkpointing passes to hoist/clone primal insts
+        // to the right spots.
+        // 
+        {
+            //RefPtr<AutodiffCheckpointPolicyBase> chkPolicy = new DefaultCheckpointPolicy(unzippedFunc->getModule());
+            transposeInfo.chkPolicy->preparePolicy(revDiffFunc);
 
-        // Mark all primal operands for hoisting.
+            auto recomputeBlockMap = createAndMapRecomputeBlocks(revDiffFunc, revBlockMap, splitInfo);
+
+            auto primalsInfo = transposeInfo.chkPolicy->processFunc(func, splitInfo);
+            
+            primalsInfo = ensurePrimalAvailability(primalsInfo, func, transposeInfo.indexRegionInfo);
+        }
+
+        /* Mark all primal operands for hoisting.
         // TODO: Can we just merge this with finishHoistingPrimalInsts?
         // TODO: Some of this logic is replicated in finishHoistingPrimalInsts. Merge it with the
         // maybeAddOperandsToWorkList logic there.
@@ -714,9 +744,9 @@ struct DiffTransposePass
                     if (!as<IRModuleInst>(instType->getParent()))
                         hoistPrimalUse(&builder, &child->typeUse);
             }
-        }
+        }*/
 
-        finishHoistingPrimals(revDiffFunc);
+        //finishHoistingPrimals(revDiffFunc);
 
         for (auto block : workList)
         {
