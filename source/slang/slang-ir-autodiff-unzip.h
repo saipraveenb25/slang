@@ -58,7 +58,9 @@ struct DiffUnzipPass
         return diffMap[inst];
     }
 
-    RefPtr<HoistedPrimalsInfo> unzipDiffInsts(IRFunc* func)
+    RefPtr<HoistedPrimalsInfo> unzipDiffInsts(
+        IRFunc* func, 
+        AutodiffCheckpointPolicyBase* chkPolicy = nullptr)
     {
         diffTypeContext.setFunc(func);
         

@@ -818,7 +818,7 @@ bool canRecompute(IRDominatorTree* domTree, IRUse* use)
     return true;
 }
 
-HoistResult DefaultCheckpointPolicy::classify(IRUse* use)
+HoistResult DefaultCheckpointPolicy::_classify(IRUse* use)
 {
     // Store all that we can.. by default, classify will only be called on relevant differential
     // uses (or on uses in a 'recompute' inst)

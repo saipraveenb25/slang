@@ -15,6 +15,41 @@ namespace Slang
         IRCloneEnv cloneEnv;
         HashSet<IRUse*> pendingUses;
 
+        void addOrReplacePendingUse(IRBuilder* builder, IRUse* use)
+        {
+            // Check if we have a clone for this use's operand.
+            // If we do then simply replace the use with the clone.
+            // Otherwise, add the use to the pending use set.
+            auto operand = use->get();
+            if (cloneEnv.mapOldValToNew.ContainsKey(operand))
+            {
+                auto clonedOperand = cloneEnv.mapOldValToNew[operand];
+                builder->replaceOperand(use, clonedOperand);
+            }
+            else
+            {
+                pendingUses.Add(use);
+            }
+        }
+
+        void addMapping(IRBuilder* builder, IRInst* inst, IRInst* clonedInst)
+        {
+            cloneEnv.mapOldValToNew.Add(inst, clonedInst);
+
+            // Resolve pending uses.
+            for (auto use = inst->firstUse; use;)
+            {
+                auto nextUse = use->nextUse;
+                
+                if (pendingUses.Contains(use))
+                {
+                    pendingUses.Remove(use);
+                    builder->replaceOperand(use, clonedInst);
+                }
+                use = nextUse;
+            }
+        }
+
         IRInst* cloneInstOutOfOrder(IRBuilder* builder, IRInst* inst)
         {
             IRInst* clonedInst = cloneInst(&cloneEnv, builder, inst);
@@ -225,17 +260,30 @@ namespace Slang
 
         RefPtr<HoistedPrimalsInfo> processFunc(IRGlobalValueWithCode* func, BlockSplitInfo* info);
 
+        void addOverride(IRUse* use, HoistResult result)
+        {
+            overrideMap[use] = result;
+        }
+
+        HoistResult classify(IRUse* use)
+        {
+            if (overrideMap.ContainsKey(use))
+                return overrideMap[use];
+            return _classify(use);
+        }
+
         // Do pre-processing on the function (mainly for 
         // 'global' checkpointing methods that consider the entire
         // function)
         // 
         virtual void preparePolicy(IRGlobalValueWithCode* func) = 0;
 
-        virtual HoistResult classify(IRUse* diffBlockUse) = 0;
+        virtual HoistResult _classify(IRUse* diffBlockUse) = 0;
 
      protected:
 
-        IRModule*               module;
+        IRModule*                            module;
+        Dictionary<IRUse*, HoistResult> overrideMap;
     };
 
     class DefaultCheckpointPolicy : public AutodiffCheckpointPolicyBase
@@ -247,7 +295,7 @@ namespace Slang
         { }
 
         virtual void preparePolicy(IRGlobalValueWithCode* func);
-        virtual HoistResult classify(IRUse* use);
+        virtual HoistResult _classify(IRUse* use);
 
         RefPtr<IRDominatorTree> domTree;
     };

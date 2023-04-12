@@ -91,7 +91,6 @@ struct DiffTransposePass
         // but that should be an easy fix later.
         RefPtr<AutodiffCheckpointPolicyBase> chkPolicy;
 
-
         // Indexed region information about the function.
         // This essentially maps the counter variables in 
         // the primal loops and differential loops so that
@@ -101,6 +100,9 @@ struct DiffTransposePass
         // the index generation at the unzipping stage.
         List<IndexTrackingInfo*> indexRegionInfo; 
 
+        // Mapping between primal and fwd-mode blocks.
+        // 
+        Dictionary<IRBlock*, IRBlock*> fwdBlockMap;
     };
 
     struct PendingBlockTerminatorEntry
@@ -533,6 +535,164 @@ struct DiffTransposePass
         }
     }
 
+    IRBlock* getFirstDiffBlock(IRFunc* func, const Dictionary<IRBlock*, IRBlock*>& revBlockMap)
+    {
+        auto terminator = as<IRUnconditionalBranch>(func->getFirstBlock()->getTerminator());
+        SLANG_RELEASE_ASSERT(terminator);
+
+        return revBlockMap[terminator->getTargetBlock()];
+    }
+
+    void cloneBlocksAndControlFlow(
+        IRBlock* startPrimal,
+        IRBlock* endBlock,
+        const Dictionary<IRBlock*, IRBlock*>& primalToRevBlockMap,
+        Dictionary<IRBlock*, IRBlock*>& primalToRecomputeBlockMap,
+        IRBlock* firstDiffBlock)
+    {
+        //IRCloneEnv cloneEnv;
+        IROutOfOrderCloneContext context;
+
+        // Load start block as current block
+        IRBlock* currentBlock = startPrimal;
+
+        IRBuilder builder(currentBlock->getModule());
+
+        while (currentBlock && currentBlock != endBlock)
+        {
+            // Clone the current block
+            auto clonedBlock = builder.emitBlock();
+            clonedBlock->insertAfter(firstDiffBlock);
+
+            // Register clone in cloneEnv
+            context.addMapping(&builder, currentBlock, clonedBlock);
+
+            // Clone the terminator inst only.
+            builder.setInsertInto(clonedBlock);
+            auto terminator = currentBlock->getTerminator();
+            auto clonedTerminator = context.cloneInstOutOfOrder(&builder, terminator);
+
+            primalToRecomputeBlockMap.Add(currentBlock, clonedBlock);
+
+            // Move to the next block, by using a switch statement on the terminator to switch between
+            // unconditional branch, if else, switch, for and return
+            switch (clonedTerminator->getOp())
+            {
+                case kIROp_unconditionalBranch:
+                {
+                    auto branchInst = as<IRUnconditionalBranch>(clonedTerminator);
+                    currentBlock = branchInst->getTargetBlock();
+                    break;
+                }
+                case kIROp_Return:
+                {
+                    currentBlock = nullptr;
+                    break;
+                }
+                case kIROp_ifElse:
+                {
+                    auto ifElseInst = as<IRIfElse>(clonedTerminator);
+                    // Clone the true side by calling this method recursively and using 
+                    // the after block as the end block.
+                    cloneBlocksAndControlFlow(
+                        ifElseInst->getTrueBlock(),
+                        ifElseInst->getAfterBlock(),
+                        primalToRevBlockMap,
+                        primalToRecomputeBlockMap,
+                        firstDiffBlock);
+                    
+                    // Do the same for the false side.
+                    cloneBlocksAndControlFlow(
+                        ifElseInst->getFalseBlock(),
+                        ifElseInst->getAfterBlock(),
+                        primalToRevBlockMap,
+                        primalToRecomputeBlockMap,
+                        firstDiffBlock);
+
+                    // Skip to the after block.
+                    currentBlock = ifElseInst->getAfterBlock();
+                    break;
+                }
+                case kIROp_Switch:
+                {
+                    auto switchInst = as<IRSwitch>(clonedTerminator);
+                    
+                    // Clone the case blocks by calling this method recursively and using
+                    // the break label as the end block.
+                    for (UInt ii = 0; ii < switchInst->getCaseCount(); ++ii)
+                    {
+                        cloneBlocksAndControlFlow(
+                            switchInst->getCaseLabel(ii),
+                            switchInst->getBreakLabel(),
+                            primalToRevBlockMap,
+                            primalToRecomputeBlockMap,
+                            firstDiffBlock);
+                    }
+
+                    // Do the same for the default block.
+                    cloneBlocksAndControlFlow(
+                        switchInst->getDefaultLabel(),
+                        switchInst->getBreakLabel(),
+                        primalToRevBlockMap,
+                        primalToRecomputeBlockMap,
+                        firstDiffBlock);
+                    
+                    // Skip to the break block.
+                    currentBlock = switchInst->getBreakLabel();
+                    break;
+                }
+                case kIROp_loop:
+                {
+                    auto forInst = as<IRLoop>(clonedTerminator);
+                    auto loopCondBlock = forInst->getTargetBlock();
+
+                    SLANG_RELEASE_ASSERT(as<IRIfElse>(loopCondBlock->getTerminator()));
+
+                    // Map the rev-block of the loop cond block as it's own recompute block.
+                    primalToRecomputeBlockMap.Add(loopCondBlock, primalToRevBlockMap[loopCondBlock]);
+
+                    // Recursively call this method on the first loop body block until the loop cond block.
+                    cloneBlocksAndControlFlow(
+                        as<IRIfElse>(loopCondBlock->getTerminator())->getTrueBlock(),
+                        loopCondBlock,
+                        primalToRevBlockMap,
+                        primalToRecomputeBlockMap,
+                        as<IRIfElse>(primalToRevBlockMap[loopCondBlock])->getTrueBlock());
+
+                    // Skip ahead to the false block of the loop cond block.
+                    currentBlock = as<IRIfElse>(loopCondBlock->getTerminator())->getFalseBlock();
+                    break;
+                }
+                default:
+                {
+                    SLANG_UNEXPECTED("Unexpected terminator");
+                    break;
+                }
+            }
+        }
+
+        return;
+    }
+
+    Dictionary<IRBlock*, IRBlock*> createAndMapRecomputeBlocks(
+        IRFunc* revDiffFunc,
+        const Dictionary<IRBlock*, IRBlock*>& primalToRevBlockMap)
+    {
+        Dictionary<IRBlock*, IRBlock*> recomputeBlockMap;
+
+        // Find first reverse-mode block.
+        IRBlock* firstRevBlock = getFirstDiffBlock(revDiffFunc, revBlockMap);
+
+        cloneBlocksAndControlFlow(
+            revDiffFunc->getFirstBlock(),
+            firstRevBlock,
+            primalToRevBlockMap,
+            recomputeBlockMap,
+            firstRevBlock);
+        
+        return recomputeBlockMap;
+    }
+
     void transposeDiffBlocksInFunc(
         IRFunc* revDiffFunc,
         FuncTranspositionInfo transposeInfo)
@@ -704,18 +864,33 @@ struct DiffTransposePass
         for (auto block : workList)
             block->removeFromParent();
         
-        // Run the three checkpointing passes to hoist/clone primal insts
-        // to the right spots.
+        // Run the checkpointing, hoisting and availability passes to move the primals to
+        // the optimal location.
         // 
         {
-            //RefPtr<AutodiffCheckpointPolicyBase> chkPolicy = new DefaultCheckpointPolicy(unzippedFunc->getModule());
             transposeInfo.chkPolicy->preparePolicy(revDiffFunc);
 
-            auto recomputeBlockMap = createAndMapRecomputeBlocks(revDiffFunc, revBlockMap, splitInfo);
+            // Construct mapping from primal blocks to reverse-mode blocks based on the
+            // mapping between primal to fwd blocks (transposeInfo.fwdBlockMap) and 
+            // then mapping form fwd to reverse blocks (revBlockMap)
+            //
+            Dictionary<IRBlock*, IRBlock*> primalToRevBlockMap;
+            for (auto blockMapping : transposeInfo.fwdBlockMap)
+            {
+                auto primalBlock = blockMapping.Key;
+                auto fwdBlock = blockMapping.Value;
 
-            auto primalsInfo = transposeInfo.chkPolicy->processFunc(func, splitInfo);
+                auto revBlock = revBlockMap[fwdBlock];
+                primalToRevBlockMap[primalBlock] = revBlock;
+            }
+
+            auto recomputeBlockMap = createAndMapRecomputeBlocks(revDiffFunc, primalToRevBlockMap);
+
+            BlockSplitInfo fwdSplitInfo;
+            fwdSplitInfo.diffBlockMap = transposeInfo.fwdBlockMap;
+            auto primalsInfo = transposeInfo.chkPolicy->processFunc(revDiffFunc, &fwdSplitInfo);
             
-            primalsInfo = ensurePrimalAvailability(primalsInfo, func, transposeInfo.indexRegionInfo);
+            primalsInfo = ensurePrimalAvailability(primalsInfo, revDiffFunc, transposeInfo.indexRegionInfo);
         }
 
         /* Mark all primal operands for hoisting.
