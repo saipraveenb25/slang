@@ -91,6 +91,22 @@ class TargetIntrinsicModifier : public Modifier
     DeclRef<Decl> scrutineeDeclRef;
 };
 
+// A modifier that requires that a string be inserted at the 
+// beginning of the generated code for a specific target.
+class RequirePreludeModifier : public Modifier 
+{
+    SLANG_AST_CLASS(RequirePreludeModifier)
+ 
+    // Token that names the target that the prelude is 
+    // required for.
+    Token targetToken;
+
+    // The string that must be inserted at the beginning
+    // of the generated code.
+    // 
+    String definitionString;
+};
+
 // A modifier that marks a declaration as representing a
 // specialization that should be preferred on a particular
 // target.

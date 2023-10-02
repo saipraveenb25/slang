@@ -8053,6 +8053,7 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         irAggType->moveToEnd();
         addTargetIntrinsicDecorations(subContext, irAggType, decl);
+        addRequirePreludeDecorations(subContext, irAggType, decl);
         for (auto modifier : decl->modifiers)
         {
             if (as<NonCopyableTypeAttribute>(modifier))
@@ -8672,6 +8673,45 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         }
     }
 
+    
+    // Attach target-intrinsic decorations to an instruction,
+    // based on modifiers on an AST declaration.
+    void addRequirePreludeDecorations(
+        IRGenContext* subContext,
+        IRInst* irInst,
+        Decl*   decl)
+    {
+        SLANG_UNUSED(subContext);
+        
+        auto builder = getBuilder();
+
+        for (auto reqPreludeMod : decl->getModifiersOfType<RequirePreludeModifier>())
+        {
+            String preludeString = reqPreludeMod->definitionString;
+
+            UnownedStringSlice targetName;
+            auto& targetToken = reqPreludeMod->targetToken;
+            if( targetToken.type != TokenType::Unknown )
+            {
+                targetName = targetToken.getContent();
+            }
+
+            CapabilitySet targetCaps;
+            if( targetName.getLength() == 0 )
+            {
+                targetCaps = CapabilitySet::makeEmpty();
+            }
+            else
+            {
+                CapabilityAtom targetCap = findCapabilityAtom(targetName);
+                SLANG_ASSERT(targetCap != CapabilityAtom::Invalid);
+                targetCaps = CapabilitySet(targetCap);
+            }
+
+            builder->addRequirePreludeDecoration(irInst, targetCaps, preludeString.getUnownedSlice());
+        }
+    }
+
         /// Is `decl` a member function (or effectively a member function) when considered as a stdlib declaration?
     bool isStdLibMemberFuncDecl(
         Decl*   inDecl)
@@ -9153,6 +9193,7 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         // If this declaration was marked as having a target-specific lowering
         // for a particular target, then handle that here.
         addTargetIntrinsicDecorations(subContext, irFunc, decl);
+        addRequirePreludeDecorations(subContext, irFunc, decl);
 
         addCatchAllIntrinsicDecorationIfNeeded(irFunc, decl);
 

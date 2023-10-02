@@ -480,6 +480,8 @@ public:
 
     void emitTextureOrTextureSamplerType(IRTextureTypeBase* type, char const* baseName) { emitTextureOrTextureSamplerTypeImpl(type, baseName); }
 
+    void emitUserPreludeStrings(IRModule* module);
+
     virtual RefObject* getExtensionTracker() { return nullptr; }
 
         /// Gets a source language for a target for a target. Returns Unknown if not a known target
@@ -602,6 +604,8 @@ public:
     HashSet<String> m_irDeclsVisited;
 
     HashSet<String> m_irTupleTypes;
+
+    HashSet<String> m_emittedPreludes;
 
     // The "effective" profile that is being used to emit code,
     // combining information from the target and entry point.

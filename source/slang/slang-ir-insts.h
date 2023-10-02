@@ -139,6 +139,23 @@ struct IRIntrinsicOpDecoration : IRDecoration
     }
 };
 
+struct IRRequirePreludeDecoration : IRDecoration
+{
+    enum { kOp = kIROp_RequirePreludeDecoration };
+    IR_LEAF_ISA(RequirePreludeDecoration)
+
+    IRCapabilitySet* getTargetCapsOperand() { return cast<IRCapabilitySet>(getOperand(0)); }
+
+    CapabilitySet getTargetCaps() { return getTargetCapsOperand()->getCaps(); }
+
+    IRStringLit* getDefinitionOperand() { return cast<IRStringLit>(getOperand(1)); }
+
+    UnownedStringSlice getDefinition()
+    {
+        return getDefinitionOperand()->getStringSlice();
+    }
+};
+
 struct IRGLSLOuterArrayDecoration : IRDecoration
 {
     enum { kOp = kIROp_GLSLOuterArrayDecoration };
@@ -4216,6 +4233,15 @@ public:
     void addTargetIntrinsicDecoration(IRInst* value, CapabilitySet const& caps, UnownedStringSlice const& definition, UnownedStringSlice const& predicate = UnownedStringSlice{}, IRInst* typeScrutinee = nullptr)
     {
         addTargetIntrinsicDecoration(value, getCapabilityValue(caps), definition, predicate, typeScrutinee);
+    }
+
+    void addRequirePreludeDecoration(IRInst* value, CapabilitySet const& caps, UnownedStringSlice const& definition)
+    {
+        addDecoration(
+                value,
+                kIROp_RequirePreludeDecoration,
+                getCapabilityValue(caps),
+                getStringValue(definition));
     }
 
     void addTargetDecoration(IRInst* value, IRInst* caps)

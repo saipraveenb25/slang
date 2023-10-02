@@ -6866,6 +6866,34 @@ namespace Slang
         return modifier;
     }
 
+    
+    static NodeBase* parseRequirePreludeModifier(Parser* parser, void* /*userData*/)
+    {
+        auto modifier = parser->astBuilder->create<RequirePreludeModifier>();
+
+        if (AdvanceIf(parser, TokenType::LParent))
+        {
+            modifier->targetToken = parser->ReadToken(TokenType::Identifier);
+
+            parser->ReadToken(TokenType::Comma);
+
+            bool first = true;
+            do
+            {
+                const auto t = parser->ReadToken();
+                first
+                    ? void(first = false)
+                    : modifier->definitionString.append(" ");
+                modifier->definitionString.append(getStringLiteralTokenValue(t));
+            }
+            while(parser->LookAheadToken(TokenType::StringLiteral));
+
+            parser->ReadToken(TokenType::RParent);
+        }
+
+        return modifier;
+    }
+
     static NodeBase* parseSpecializedForTargetModifier(Parser* parser, void* /*userData*/)
     {
         auto modifier = parser->astBuilder->create<SpecializedForTargetModifier>();
@@ -7324,6 +7352,7 @@ namespace Slang
         _makeParseModifier("__spirv_version",       parseSPIRVVersionModifier),
         _makeParseModifier("__spirv_capability",    parseSPIRVCapabilityModifier),
         _makeParseModifier("__cuda_sm_version",     parseCUDASMVersionModifier),
+        _makeParseModifier("__require_prelude",     parseRequirePreludeModifier),
 
         _makeParseModifier("__builtin_type",        parseBuiltinTypeModifier),
         _makeParseModifier("__builtin_requirement", parseBuiltinRequirementModifier),

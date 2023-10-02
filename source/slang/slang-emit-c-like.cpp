@@ -4166,6 +4166,28 @@ void CLikeSourceEmitter::executeEmitActions(List<EmitAction> const& actions)
     }
 }
 
+void CLikeSourceEmitter::emitUserPreludeStrings(IRModule* module)
+{
+    for (auto globalInst : module->getGlobalInsts())
+    {
+        if (auto requirePreludeDecoration = globalInst->findDecoration<IRRequirePreludeDecoration>())
+        {
+            // Check target capability.
+            if (requirePreludeDecoration->getTargetCaps().isIncompatibleWith(getTargetCaps()))
+                continue;
+            
+            auto preludeString = String(requirePreludeDecoration->getDefinition());
+            
+            if (m_emittedPreludes.contains(preludeString))
+                continue;
+
+            m_emittedPreludes.add(preludeString);
+            m_writer->emit(preludeString);
+            m_writer->emit("\n");
+        }
+    }
+}
+
 void CLikeSourceEmitter::emitModuleImpl(IRModule* module, DiagnosticSink* sink)
 {
     // The IR will usually come in an order that respects
@@ -4174,6 +4196,8 @@ void CLikeSourceEmitter::emitModuleImpl(IRModule* module, DiagnosticSink* sink)
     // the order in which we emit things.
 
     SLANG_UNUSED(sink);
+
+    emitUserPreludeStrings(module);
 
     List<EmitAction> actions;
 

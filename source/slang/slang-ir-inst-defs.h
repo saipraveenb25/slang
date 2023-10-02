@@ -663,6 +663,7 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
         INST(TargetIntrinsicDecoration,     targetIntrinsic,        2, 0)
     INST_RANGE(TargetSpecificDecoration, TargetDecoration, TargetIntrinsicDecoration)
     INST(GLSLOuterArrayDecoration,          glslOuterArray,         1, 0)
+    INST(RequirePreludeDecoration,          requirePrelude,         2, 0)
     
     INST(InterpolationModeDecoration,       interpolationMode,      1, 0)
     INST(NameHintDecoration,                nameHint,               1, 0)
