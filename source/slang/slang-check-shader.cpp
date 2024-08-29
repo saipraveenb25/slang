@@ -1507,7 +1507,7 @@ namespace Slang
             outGenericArgs.add(argExpr);
         }
     }
-
+    
     Type* Linkage::specializeType(
         Type*           unspecializedType,
         Int             argCount,
