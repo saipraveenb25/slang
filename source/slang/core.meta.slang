@@ -372,24 +372,24 @@ struct DifferentialRefPair : IDifferentiableRefType
     typedef DifferentialRefPair<T.Differential> Differential;
     typedef T.Differential DifferentialElementType;
 
-    __intrinsic_op($(kIROp_MakeDifferentialRefPairUserCode))
+    __intrinsic_op($(kIROp_MakeDifferentialRefPair))
     __init(T _primal, T.Differential _differential);
 
     property p : T
     {
-        __intrinsic_op($(kIROp_DifferentialRefPairGetPrimalUserCode))
+        __intrinsic_op($(kIROp_DifferentialRefPairGetPrimal))
         get;
     }
 
     property v : T
     {
-        __intrinsic_op($(kIROp_DifferentialRefPairGetPrimalUserCode))
+        __intrinsic_op($(kIROp_DifferentialRefPairGetPrimal))
         get;
     }
 
     property d : T.Differential
     {
-        __intrinsic_op($(kIROp_DifferentialRefPairGetDifferentialUserCode))
+        __intrinsic_op($(kIROp_DifferentialRefPairGetDifferential))
         get;
     }
 }

@@ -176,7 +176,20 @@ IRInst* _lookupWitness(IRBuilder* builder, IRInst* witness, IRInst* requirementK
 
 IRInst* AutoDiffTranscriberBase::tryGetDifferentiableWitness(IRBuilder* builder, IRInst* originalType)
 {
-    return differentiableTypeConformanceContext.tryGetDifferentiableWitness(builder, originalType);
+    if (auto valueWitness = tryGetDifferentiableValueTypeWitness(builder, originalType))
+        return valueWitness;
+        
+    if (auto ptrWitness = tryGetDifferentiablePtrTypeWitness(builder, originalType))
+        return ptrWitness;
+}
+
+IRInst* AutoDiffTranscriberBase::tryGetDifferentiableValueTypeWitness(IRBuilder* builder, IRInst* originalType)
+{
+    return differentiableTypeConformanceContext.tryGetDifferentiableValueTypeWitness(builder, originalType);
+}
+IRInst* AutoDiffTranscriberBase::tryGetDifferentiablePtrTypeWitness(IRBuilder* builder, IRInst* originalType)
+{
+    return differentiableTypeConformanceContext.tryGetDifferentiablePtrTypeWitness(builder, originalType);
 }
 
 IRType* AutoDiffTranscriberBase::getOrCreateDiffPairType(IRBuilder* builder, IRInst* primalType, IRInst* witness)
@@ -278,8 +291,9 @@ IRType* AutoDiffTranscriberBase::_differentiateTypeImpl(IRBuilder* builder, IRTy
     }
 
     case kIROp_DifferentialPairType:
+    case kIROp_DifferentialRefPairType:
     {
-        auto primalPairType = as<IRDifferentialPairType>(primalType);
+        auto primalPairType = as<IRDifferentialPairTypeBase>(primalType);
         return getOrCreateDiffPairType(
             builder,
             differentiableTypeConformanceContext.getDiffTypeFromPairType(builder, primalPairType),

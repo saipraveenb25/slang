@@ -3022,6 +3022,17 @@ namespace Slang
             operands);
     }
 
+    IRDifferentialRefPairType* IRBuilder::getDifferentialPairRefType(
+        IRType* valueType,
+        IRInst* witnessTable)
+    {
+        IRInst* operands[] = { valueType, witnessTable };
+        return (IRDifferentialRefPairType*)getType(
+            kIROp_DifferentialRefPairType,
+            sizeof(operands) / sizeof(operands[0]),
+            operands);
+    }
+
     IRDifferentialPairUserCodeType* IRBuilder::getDifferentialPairUserCodeType(
         IRType* valueType,
         IRInst* witnessTable)

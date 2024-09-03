@@ -1128,7 +1128,8 @@ namespace Slang
         {
             if (auto builtinRequirement = declRefType->getDeclRef().getDecl()->findModifier<BuiltinRequirementModifier>())
             {
-                if (builtinRequirement->kind == BuiltinRequirementKind::DifferentialType)
+                if (builtinRequirement->kind == BuiltinRequirementKind::DifferentialType
+                    || builtinRequirement->kind == BuiltinRequirementKind::DifferentialRefType)
                 {
                     // We are trying to get differential type from a differential type.
                     // The result is itself.
@@ -1136,7 +1137,10 @@ namespace Slang
                 }
             }
             type = resolveType(type);
-            if (const auto witness = as<SubtypeWitness>(tryGetInterfaceConformanceWitness(type, builder->getDifferentiableInterfaceType())))
+            auto witness = as<SubtypeWitness>(tryGetInterfaceConformanceWitness(type, builder->getDifferentiableInterfaceType()));
+            if (!witness)
+                witness = as<SubtypeWitness>(tryGetInterfaceConformanceWitness(type, builder->getDifferentiableRefInterfaceType()));
+            if (witness)
             {
                 auto diffTypeLookupResult = lookUpMember(
                     getASTBuilder(),
@@ -2887,15 +2891,22 @@ namespace Slang
                 return m_astBuilder->getExpandType(diffPairEachType, makeArrayViewSingle(primalType));
             }
         }
+
         // Get a reference to the builtin 'IDifferentiable' interface
         auto differentiableInterface = getASTBuilder()->getDifferentiableInterfaceType();
+        auto differentiableRefInterface = getASTBuilder()->getDifferentiableRefInterfaceType();
 
-        auto conformanceWitness = as<Witness>(isSubtype(primalType, differentiableInterface, IsSubTypeOptions::None));
         // Check if the provided type inherits from IDifferentiable.
         // If not, return the original type.
-        if (conformanceWitness)
+        if (auto conformanceWitness = as<Witness>(
+                isSubtype(primalType, differentiableInterface, IsSubTypeOptions::None)))
         {
             return m_astBuilder->getDifferentialPairType(primalType, conformanceWitness);
+        }
+        else if (auto conformanceWitness = as<Witness>(
+                isSubtype(primalType, differentiableRefInterface, IsSubTypeOptions::None)))
+        {
+            return m_astBuilder->getDifferentialRefPairType(primalType, conformanceWitness);
         }
         else
             return primalType;

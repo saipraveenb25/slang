@@ -408,15 +408,29 @@ MatrixExpressionType* ASTBuilder::getMatrixType(Type* elementType, IntVal* rowCo
 
 DifferentialPairType* ASTBuilder::getDifferentialPairType(
     Type* valueType,
-    Witness* primalIsDifferentialWitness)
+    Witness* diffTypeWitness)
 {
-    Val* args[] = { valueType, primalIsDifferentialWitness };
+    Val* args[] = { valueType, diffTypeWitness };
     return as<DifferentialPairType>(getSpecializedBuiltinType(makeArrayView(args), "DifferentialPairType"));
+}
+
+DifferentialPairType* ASTBuilder::getDifferentialRefPairType(
+    Type* valueType,
+    Witness* diffRefTypeWitness)
+{
+    Val* args[] = { valueType, diffRefTypeWitness };
+    return as<DifferentialPairType>(getSpecializedBuiltinType(makeArrayView(args), "DifferentialRefPairType"));
 }
 
 DeclRef<InterfaceDecl> ASTBuilder::getDifferentiableInterfaceDecl()
 {
     DeclRef<InterfaceDecl> declRef = DeclRef<InterfaceDecl>(getBuiltinDeclRef("DifferentiableType", nullptr));
+    return declRef;
+}
+
+DeclRef<InterfaceDecl> ASTBuilder::getDifferentiableRefInterfaceDecl()
+{
+    DeclRef<InterfaceDecl> declRef = DeclRef<InterfaceDecl>(getBuiltinDeclRef("DifferentiableRefType", nullptr));
     return declRef;
 }
 
@@ -455,6 +469,11 @@ MeshOutputType* ASTBuilder::getMeshOutputTypeFromModifier(
 }
 
 Type* ASTBuilder::getDifferentiableInterfaceType()
+{
+    return DeclRefType::create(this, getDifferentiableInterfaceDecl());
+}
+
+Type* ASTBuilder::getDifferentiableRefInterfaceType()
 {
     return DeclRefType::create(this, getDifferentiableInterfaceDecl());
 }

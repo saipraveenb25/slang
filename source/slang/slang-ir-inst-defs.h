@@ -61,7 +61,8 @@ INST(Nop, nop, 0, 0)
 
     INST(DifferentialPairType, DiffPair, 1, HOISTABLE)
     INST(DifferentialPairUserCodeType, DiffPairUserCode, 1, HOISTABLE)
-    INST_RANGE(DifferentialPairTypeBase, DifferentialPairType, DifferentialPairUserCodeType)
+    INST(DifferentialRefPairType, DiffRefPair, 1, HOISTABLE)
+    INST_RANGE(DifferentialPairTypeBase, DifferentialPairType, DifferentialRefPairType)
 
     INST(BackwardDiffIntermediateContextType, BwdDiffIntermediateCtxType, 1, HOISTABLE)
 
@@ -325,11 +326,13 @@ INST_RANGE(MakeDifferentialPairBase, MakeDifferentialPair, MakeDifferentialPairU
 
 INST(DifferentialPairGetDifferential, GetDifferential, 1, 0)
 INST(DifferentialPairGetDifferentialUserCode, GetDifferentialUserCode, 1, 0)
-INST_RANGE(DifferentialPairGetDifferentialBase, DifferentialPairGetDifferential, DifferentialPairGetDifferentialUserCode)
+INST(DifferentialRefPairGetDifferential, GetDifferentialRef, 1, 0)
+INST_RANGE(DifferentialPairGetDifferentialBase, DifferentialPairGetDifferential, DifferentialRefPairGetDifferential)
 
 INST(DifferentialPairGetPrimal, GetPrimal, 1, 0)
 INST(DifferentialPairGetPrimalUserCode, GetPrimalUserCode, 1, 0)
-INST_RANGE(DifferentialPairGetPrimalBase, DifferentialPairGetPrimal, DifferentialPairGetPrimalUserCode)
+INST(DifferentialRefPairGetPrimal, GetPrimalRef, 1, 0)
+INST_RANGE(DifferentialPairGetPrimalBase, DifferentialPairGetPrimal, DifferentialRefPairGetPrimal)
 
 INST(Specialize, specialize, 2, HOISTABLE)
 INST(LookupWitness, lookupWitness, 2, HOISTABLE)

@@ -1660,6 +1660,11 @@ struct IRDifferentialPairType : IRDifferentialPairTypeBase
     IR_LEAF_ISA(DifferentialPairType)
 };
 
+struct IRDifferentialRefPairType : IRDifferentialPairTypeBase
+{
+    IR_LEAF_ISA(DifferentialRefPairType)
+};
+
 struct IRDifferentialPairUserCodeType : IRDifferentialPairTypeBase
 {
     IR_LEAF_ISA(DifferentialPairUserCodeType)

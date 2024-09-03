@@ -93,6 +93,10 @@ struct AutoDiffTranscriberBase
 
     IRInst* tryGetDifferentiableWitness(IRBuilder* builder, IRInst* originalType);
 
+    IRInst* tryGetDifferentiableValueTypeWitness(IRBuilder* builder, IRInst* originalType);
+
+    IRInst* tryGetDifferentiablePtrTypeWitness(IRBuilder* builder, IRInst* originalType);
+
     IRType* getOrCreateDiffPairType(IRBuilder* builder, IRInst* primalType, IRInst* witness);
 
     IRType* getOrCreateDiffPairType(IRBuilder* builder, IRInst* originalType);

@@ -3620,6 +3620,10 @@ public:
     IRDifferentialPairType* getDifferentialPairType(
         IRType* valueType,
         IRInst* witnessTable);
+    
+    IRDifferentialRefPairType* getDifferentialRefPairType(
+        IRType* valueType,
+        IRInst* witnessTable);
 
     IRDifferentialPairUserCodeType* getDifferentialPairUserCodeType(
         IRType* valueType,
