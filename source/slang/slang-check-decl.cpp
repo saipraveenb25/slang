@@ -9902,7 +9902,8 @@ namespace Slang
             bool isDiffParam = (!param->findModifier<NoDiffModifier>());
             if (isDiffParam)
             {
-                if (auto pairType = as<DifferentialPairType>(visitor->getDifferentialPairType(param->getType())))
+                auto diffPair = visitor->getDifferentialPairType(param->getType());
+                if (auto pairType = as<DifferentialPairType>(diffPair))
                 {
                     arg->type.type = pairType;
                     arg->type.isLeftValue = true;
@@ -9922,6 +9923,11 @@ namespace Slang
                         // inout T : IDifferentiable -> inout DifferentialPair<T>
                         direction = ParameterDirection::kParameterDirection_InOut;
                     }
+                }
+                else if (auto refPairType = as<DifferentialPtrPairType>(diffPair))
+                {
+                    // no need to change direction of ref-pairs.
+                    arg->type.type = refPairType;
                 }
                 else
                 {

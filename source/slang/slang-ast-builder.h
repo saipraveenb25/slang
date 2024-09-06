@@ -479,10 +479,17 @@ public:
 
     DifferentialPairType* getDifferentialPairType(
         Type* valueType,
-        Witness* primalIsDifferentialWitness);
+        Witness* diffTypeWitness);
+    
+    DifferentialPtrPairType* getDifferentialPtrPairType(
+        Type* valueType,
+        Witness* diffRefTypeWitness);
 
     DeclRef<InterfaceDecl> getDifferentiableInterfaceDecl();
+    DeclRef<InterfaceDecl> getDifferentiableRefInterfaceDecl();
+
     Type* getDifferentiableInterfaceType();
+    Type* getDifferentiableRefInterfaceType();
 
     bool isDifferentiableInterfaceAvailable();
 
