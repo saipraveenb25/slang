@@ -656,12 +656,44 @@ void DifferentiableTypeConformanceContext::setFunc(IRGlobalValueWithCode* func)
     }
 }
 
+IRWitnessTable* findGlobalWitness(IRInterfaceType* interface, IRInst* type)
+{
+    for (auto use = type->firstUse; use; use = use->nextUse)
+    {
+        if (auto witnessTable = as<IRWitnessTable>(use->getUser()))
+        {
+            if (witnessTable->getConcreteType() == type &&
+                witnessTable->getConformanceType() == interface)
+                return witnessTable;
+        }
+    }
+
+    return nullptr;
+}
+
 IRInst* DifferentiableTypeConformanceContext::lookUpConformanceForType(
     IRInst* type,
     DiffConformanceKind kind)
 {
     IRInst* foundResult = nullptr;
     differentiableTypeWitnessDictionary.tryGetValue(type, foundResult);
+
+    if (!foundResult)
+    {
+        // For concrete types, we should be able to look for a table.
+        if (kind == DiffConformanceKind::Value)
+            foundResult = findGlobalWitness(sharedContext->differentiableInterfaceType, type);
+        else if (kind == DiffConformanceKind::Ptr)
+            foundResult = findGlobalWitness(sharedContext->differentiablePtrInterfaceType, type);
+        else if (kind == DiffConformanceKind::Any)
+        {
+            foundResult = findGlobalWitness(sharedContext->differentiableInterfaceType, type);
+            if (!foundResult)
+                foundResult =
+                    findGlobalWitness(sharedContext->differentiablePtrInterfaceType, type);
+        }
+    }
+
     if (!foundResult)
         return nullptr;
 
@@ -1557,6 +1589,136 @@ IRInst* DifferentiableTypeConformanceContext::buildExtractExistensialTypeWitness
     return nullptr;
 }
 
+IRInst* DifferentiableTypeConformanceContext::emitDAddOfDiffInstType(
+    IRBuilder* builder,
+    IRType* primalType,
+    IRInst* op1,
+    IRInst* op2)
+{
+    if (auto arrayType = as<IRArrayType>(primalType))
+    {
+        // TODO: This case should really not be necessary anymore
+        auto diffElementType =
+            (IRType*)this->getDifferentialForType(builder, arrayType->getElementType());
+        SLANG_RELEASE_ASSERT(diffElementType);
+        auto arraySize = arrayType->getElementCount();
+
+        if (auto constArraySize = as<IRIntLit>(arraySize))
+        {
+            List<IRInst*> args;
+            for (IRIntegerValue i = 0; i < constArraySize->getValue(); i++)
+            {
+                auto index = builder->getIntValue(builder->getIntType(), i);
+                auto op1Val = builder->emitElementExtract(diffElementType, op1, index);
+                auto op2Val = builder->emitElementExtract(diffElementType, op2, index);
+                args.add(
+                    emitDAddOfDiffInstType(builder, arrayType->getElementType(), op1Val, op2Val));
+            }
+            auto diffArrayType =
+                builder->getArrayType(diffElementType, arrayType->getElementCount());
+            return builder->emitMakeArray(diffArrayType, (UInt)args.getCount(), args.getBuffer());
+        }
+        else
+        {
+            // TODO: insert a runtime loop here.
+            SLANG_UNIMPLEMENTED_X("dadd of dynamic array.");
+        }
+    }
+    else if (auto diffPairUserType = as<IRDifferentialPairUserCodeType>(primalType))
+    {
+        // TODO: This case should really not be necessary anymore
+        auto diffType = (IRType*)this->getDiffTypeFromPairType(builder, diffPairUserType);
+        auto diffWitness = this->getDiffTypeWitnessFromPairType(builder, diffPairUserType);
+
+        auto primal1 = builder->emitDifferentialPairGetPrimalUserCode(op1);
+        auto primal2 = builder->emitDifferentialPairGetPrimalUserCode(op2);
+        auto primal =
+            emitDAddOfDiffInstType(builder, diffPairUserType->getValueType(), primal1, primal2);
+
+        auto diff1 = builder->emitDifferentialPairGetDifferentialUserCode(diffType, op1);
+        auto diff2 = builder->emitDifferentialPairGetDifferentialUserCode(diffType, op2);
+        auto diff = emitDAddOfDiffInstType(builder, diffType, diff1, diff2);
+
+        auto diffDiffPairType = builder->getDifferentialPairUserCodeType(diffType, diffWitness);
+        return builder->emitMakeDifferentialPairUserCode(diffDiffPairType, primal, diff);
+    }
+    else if (as<IRInterfaceType>(primalType) || as<IRAssociatedType>(primalType))
+    {
+        // If our type is existential, we need to handle the case where
+        // one or both of our operands are null-type.
+        //
+        return emitDAddForExistentialType(builder, primalType, op1, op2);
+    }
+
+    auto addMethod = this->getAddMethodForType(builder, primalType);
+
+    // Should exist.
+    SLANG_ASSERT(addMethod);
+
+    return builder->emitCallInst(
+        (IRType*)this->getDifferentialForType(builder, primalType),
+        addMethod,
+        List<IRInst*>(op1, op2));
+}
+
+IRInst* DifferentiableTypeConformanceContext::emitDAddForExistentialType(
+    IRBuilder* builder,
+    IRType* primalType,
+    IRInst* op1,
+    IRInst* op2)
+{
+    return builder->emitCallInst(
+        (IRType*)this->getDifferentialForType(builder, primalType),
+        this->getOrCreateExistentialDAddMethod(),
+        List<IRInst*>({op1, op2}));
+}
+
+IRInst* DifferentiableTypeConformanceContext::emitDZeroOfDiffInstType(
+    IRBuilder* builder,
+    IRType* primalType)
+{
+    if (auto arrayType = as<IRArrayType>(primalType))
+    {
+        // TODO: This case should really not be necessary anymore
+        auto diffElementType =
+            (IRType*)this->getDifferentialForType(builder, arrayType->getElementType());
+        SLANG_RELEASE_ASSERT(diffElementType);
+        auto diffArrayType = builder->getArrayType(diffElementType, arrayType->getElementCount());
+        auto diffElementZero = emitDZeroOfDiffInstType(builder, arrayType->getElementType());
+        return builder->emitMakeArrayFromElement(diffArrayType, diffElementZero);
+    }
+    else if (auto diffPairUserType = as<IRDifferentialPairUserCodeType>(primalType))
+    {
+        // TODO: This case should really not be necessary anymore.
+        auto primalZero = emitDZeroOfDiffInstType(builder, diffPairUserType->getValueType());
+        auto diffZero = primalZero;
+        auto diffType = primalZero->getFullType();
+        auto diffWitness = this->getDiffTypeWitnessFromPairType(builder, diffPairUserType);
+        auto diffDiffPairType = builder->getDifferentialPairUserCodeType(diffType, diffWitness);
+        return builder->emitMakeDifferentialPairUserCode(diffDiffPairType, primalZero, diffZero);
+    }
+    else if (as<IRInterfaceType>(primalType) || as<IRAssociatedType>(primalType))
+    {
+        // Pack a null value into an existential type.
+        auto existentialZero = builder->emitMakeExistential(
+            this->sharedContext->differentiableInterfaceType,
+            this->emitNullDifferential(builder),
+            this->sharedContext->nullDifferentialWitness);
+
+        return existentialZero;
+    }
+
+    auto zeroMethod = this->getZeroMethodForType(builder, primalType);
+
+    // Should exist.
+    SLANG_ASSERT(zeroMethod);
+
+    return builder->emitCallInst(
+        (IRType*)this->getDifferentialForType(builder, primalType),
+        zeroMethod,
+        List<IRInst*>());
+}
+
 void copyCheckpointHints(
     IRBuilder* builder,
     IRGlobalValueWithCode* oldInst,
@@ -1874,6 +2036,7 @@ struct AutoDiffPass : public InstPassBase
     {
         bool result = false;
         OrderedHashSet<IRInst*> loweredIntermediateTypes;
+        Dictionary<IRInst*, IRGlobalValueWithCode*> typeToFuncMap;
 
         // Replace all `BackwardDiffIntermediateContextType` insts with the struct type
         // that we generated during backward diff pass.
@@ -1897,6 +2060,9 @@ struct AutoDiffPass : public InstPassBase
                             if (type)
                             {
                                 loweredIntermediateTypes.add(type);
+                                auto func =
+                                    cast<IRGlobalValueWithCode>(differentiateInst->getFunc());
+                                typeToFuncMap.add(type, func);
                                 inst->replaceUsesWith(type);
                                 inst->removeAndDeallocate();
                                 changed = true;
@@ -1913,7 +2079,7 @@ struct AutoDiffPass : public InstPassBase
         }
         // Now we generate the differential type for the intermediate context type
         // to allow higher order differentiation.
-        generateDifferentialImplementationForContextType(loweredIntermediateTypes);
+        generateDifferentialImplementationForContextType(loweredIntermediateTypes, typeToFuncMap);
         return result;
     }
 
@@ -2008,7 +2174,9 @@ struct AutoDiffPass : public InstPassBase
         }
     }
 
-    void generateDifferentialImplementationForContextType(OrderedHashSet<IRInst*>& contextTypes)
+    void generateDifferentialImplementationForContextType(
+        OrderedHashSet<IRInst*>& contextTypes,
+        Dictionary<IRInst*, IRGlobalValueWithCode*> typeToFuncMap)
     {
         // First we are going to topology sort all intermediate context types.
         OrderedHashSet<IRInst*> sortedContextTypes;
@@ -2034,6 +2202,10 @@ struct AutoDiffPass : public InstPassBase
         IRBuilder builder(module);
         for (auto t : sortedContextTypes)
         {
+            auto func = typeToFuncMap[t];
+            DifferentiableTypeConformanceContext ctx(this->autodiffContext);
+            ctx.setFunc(func);
+
             if (t->getOp() == kIROp_Generic || t->getOp() == kIROp_StructType)
             {
                 // For generics/struct types, we will generate a new generic/struct type
@@ -2041,7 +2213,7 @@ struct AutoDiffPass : public InstPassBase
 
                 SLANG_RELEASE_ASSERT(t->getParent() && t->getParent()->getOp() == kIROp_Module);
                 builder.setInsertBefore(t);
-                auto diffInfo = fillDifferentialTypeImplementation(diffTypes, t);
+                auto diffInfo = fillDifferentialTypeImplementation(&ctx, diffTypes, t);
                 diffTypes[t] = diffInfo;
             }
             else if (auto specialize = as<IRSpecialize>(t))
@@ -2100,6 +2272,7 @@ struct AutoDiffPass : public InstPassBase
     }
 
     IntermediateContextTypeDifferentialInfo fillDifferentialTypeImplementationForStruct(
+        DifferentiableTypeConformanceContext* ctx,
         OrderedDictionary<IRInst*, IntermediateContextTypeDifferentialInfo>& diffTypes,
         IRStructType* originalType,
         IRStructType* diffType)
@@ -2113,6 +2286,7 @@ struct AutoDiffPass : public InstPassBase
         // Generate the fields for all differentiable members of the original struct type.
         struct FieldInfo
         {
+            IRType* primalType;
             IRStructField* field;
             IRInst* witness;
         };
@@ -2121,7 +2295,20 @@ struct AutoDiffPass : public InstPassBase
         for (auto field : originalType->getFields())
         {
             IRInst* diffFieldWitness = nullptr;
-            if (auto diffDecor =
+
+            diffFieldWitness = ctx->tryGetDifferentiableWitness(
+                &builder,
+                field->getFieldType(),
+                DiffConformanceKind::Value);
+
+            if (!diffFieldWitness)
+            {
+                IntermediateContextTypeDifferentialInfo diffFieldTypeInfo;
+                diffTypes.tryGetValue(field->getFieldType(), diffFieldTypeInfo);
+                diffFieldWitness = diffFieldTypeInfo.diffWitness;
+            }
+
+            /*if (auto diffDecor =
                     field->findDecoration<IRIntermediateContextFieldDifferentialTypeDecoration>())
             {
                 diffFieldWitness = diffDecor->getDifferentialWitness();
@@ -2131,20 +2318,24 @@ struct AutoDiffPass : public InstPassBase
                 IntermediateContextTypeDifferentialInfo diffFieldTypeInfo;
                 diffTypes.tryGetValue(field->getFieldType(), diffFieldTypeInfo);
                 diffFieldWitness = diffFieldTypeInfo.diffWitness;
-            }
+            }*/
             if (diffFieldWitness)
             {
                 FieldInfo info;
                 IRBuilder keyBuilder = builder;
                 keyBuilder.setInsertBefore(maybeFindOuterGeneric(originalType));
                 auto diffKey = keyBuilder.createStructKey();
-                auto diffFieldType = _lookupWitness(
+                auto diffFieldType = ctx->getDifferentialForType(&builder, field->getFieldType());
+
+                /*_lookupWitness(
                     &keyBuilder,
                     diffFieldWitness,
                     autodiffContext->differentialAssocTypeStructKey,
-                    builder.getTypeKind());
+                    builder.getTypeKind());*/
+
                 info.field = builder.createStructField(diffType, diffKey, (IRType*)diffFieldType);
                 info.witness = diffFieldWitness;
+                info.primalType = field->getFieldType();
                 builder.addDecoration(field->getKey(), kIROp_DerivativeMemberDecoration, diffKey);
                 builder.addDecoration(diffKey, kIROp_DerivativeMemberDecoration, diffKey);
                 diffFields.add(info);
@@ -2163,16 +2354,17 @@ struct AutoDiffPass : public InstPassBase
             builder.setInsertInto(zeroMethod);
             builder.emitBlock();
             List<IRInst*> fieldVals;
+
             for (auto info : diffFields)
             {
-                auto innerZeroMethod = _lookupWitness(
+                /*auto innerZeroMethod = _lookupWitness(
                     &builder,
                     info.witness,
                     autodiffContext->zeroMethodStructKey,
                     autodiffContext->zeroMethodType);
                 IRInst* val =
-                    builder.emitCallInst(info.field->getFieldType(), innerZeroMethod, 0, nullptr);
-                fieldVals.add(val);
+                    builder.emitCallInst(info.field->getFieldType(), innerZeroMethod, 0, nullptr);*/
+                fieldVals.add(ctx->emitDZeroOfDiffInstType(&builder, info.primalType));
             }
             builder.emitReturn(builder.emitMakeStruct(diffType, fieldVals));
         }
@@ -2194,20 +2386,16 @@ struct AutoDiffPass : public InstPassBase
             List<IRInst*> fieldVals;
             for (auto info : diffFields)
             {
-                auto innerAddMethod = _lookupWitness(
-                    &builder,
-                    info.witness,
-                    autodiffContext->addMethodStructKey,
-                    autodiffContext->addMethodType);
                 IRInst* args[2] = {
                     builder
                         .emitFieldExtract(info.field->getFieldType(), param1, info.field->getKey()),
                     builder
                         .emitFieldExtract(info.field->getFieldType(), param2, info.field->getKey()),
                 };
-                IRInst* val =
-                    builder.emitCallInst(info.field->getFieldType(), innerAddMethod, 2, args);
-                fieldVals.add(val);
+                /*IRInst* val =
+                    builder.emitCallInst(info.field->getFieldType(), innerAddMethod, 2, args);*/
+                fieldVals.add(
+                    ctx->emitDAddOfDiffInstType(&builder, info.primalType, args[0], args[1]));
             }
             builder.emitReturn(builder.emitMakeStruct(diffType, fieldVals));
         }
@@ -2256,6 +2444,7 @@ struct AutoDiffPass : public InstPassBase
     }
 
     IntermediateContextTypeDifferentialInfo fillDifferentialTypeImplementation(
+        DifferentiableTypeConformanceContext* ctx,
         OrderedDictionary<IRInst*, IntermediateContextTypeDifferentialInfo>& diffTypes,
         IRInst* originalType)
     {
@@ -2265,6 +2454,7 @@ struct AutoDiffPass : public InstPassBase
             builder.setInsertBefore(originalType);
             auto diffType = builder.createStructType();
             return fillDifferentialTypeImplementationForStruct(
+                ctx,
                 diffTypes,
                 as<IRStructType>(originalType),
                 as<IRStructType>(diffType));
@@ -2277,7 +2467,7 @@ struct AutoDiffPass : public InstPassBase
             auto structType = as<IRStructType>(findGenericReturnVal(genType));
             SLANG_RELEASE_ASSERT(structType);
 
-            auto innerResult = fillDifferentialTypeImplementation(diffTypes, structType);
+            auto innerResult = fillDifferentialTypeImplementation(ctx, diffTypes, structType);
             IRBuilder builder(originalType);
             builder.setInsertBefore(originalType);
 

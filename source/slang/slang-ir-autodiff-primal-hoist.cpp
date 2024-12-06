@@ -1419,7 +1419,8 @@ bool canInstBeStored(IRInst* inst)
     // stored into variables or context structs as normal values.
     //
     if (as<IRTypeType>(inst->getDataType()) || as<IRWitnessTableType>(inst->getDataType()) ||
-        as<IRTypeKind>(inst->getDataType()) || as<IRFuncType>(inst->getDataType()))
+        as<IRTypeKind>(inst->getDataType()) || as<IRFuncType>(inst->getDataType()) ||
+        !inst->getDataType())
         return false;
 
     return true;

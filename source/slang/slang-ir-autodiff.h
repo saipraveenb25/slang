@@ -445,6 +445,20 @@ struct DifferentiableTypeConformanceContext
         IRBuilder* builder,
         IRExtractExistentialType* extractExistentialType,
         DiffConformanceKind target);
+
+    IRInst* emitDAddOfDiffInstType(
+        IRBuilder* builder,
+        IRType* primalType,
+        IRInst* op1,
+        IRInst* op2);
+
+    IRInst* emitDAddForExistentialType(
+        IRBuilder* builder,
+        IRType* primalType,
+        IRInst* op1,
+        IRInst* op2);
+
+    IRInst* emitDZeroOfDiffInstType(IRBuilder* builder, IRType* primalType);
 };
 
 
