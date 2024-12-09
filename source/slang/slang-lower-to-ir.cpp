@@ -9071,6 +9071,12 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         IRInst* inst,
         DifferentiableAttribute* attr)
     {
+        // TODO: Problem is that for dynamic types we have to lower the diff type relationship into
+        // the function body. Current approach: We add annotation instructions into the code as
+        // necessary. Need to intercept at lowerType itself. Let's add a type-hook mechanism that
+        // emits this code for differentiable functions.
+        // Plus need to register the derivative types as we get them.
+        //
         auto irDict = getBuilder()->addDifferentiableTypeDictionaryDecoration(inst);
         for (auto& entry : attr->getMapTypeToIDifferentiableWitness())
         {
@@ -10732,10 +10738,10 @@ static void _addFlattenedTupleArgs(List<IRInst*>& ioArgs, IRInst* val)
     }
 }
 
-bool isAbstractWitnessTable(IRInst* inst)
 {
-    if (as<IRThisTypeWitness>(inst) || as<IRInterfaceRequirementEntry>(inst))
-        return true;
+    bool isAbstractWitnessTable(
+        IRInst *
+        inst) if (as<IRThisTypeWitness>(inst) || as<IRInterfaceRequirementEntry>(inst)) return true;
     if (auto lookup = as<IRLookupWitnessMethod>(inst))
         return isAbstractWitnessTable(lookup->getWitnessTable());
     return false;

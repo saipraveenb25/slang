@@ -1094,6 +1094,20 @@ IRType* DifferentiableTypeConformanceContext::differentiateType(
     }
 }
 
+IRType* getAssociatedTypeForKey(IRInst* key)
+{
+    for (auto use = key->firstUse; use; use = use->nextUse)
+    {
+        if (auto interfaceReq = as<IRInterfaceRequirementEntry>(key))
+        {
+            if (auto assocType = as<IRAssociatedType>(interfaceReq->getRequirementVal()))
+                return assocType;
+        }
+    }
+
+    return nullptr;
+}
+
 IRInst* DifferentiableTypeConformanceContext::tryGetDifferentiableWitness(
     IRBuilder* builder,
     IRInst* primalType,
@@ -1141,8 +1155,9 @@ IRInst* DifferentiableTypeConformanceContext::tryGetDifferentiableWitness(
     }
     else if (auto lookup = as<IRLookupWitnessMethod>(primalType))
     {
-        // For types that are lookups from a table, we can simply lookup the witness from the same
-        // table
+        // Trivial cases: For types that are lookups from a table, we can simply lookup the witness
+        // from the same table
+        //
         if (lookup->getRequirementKey() == sharedContext->differentialAssocTypeStructKey)
         {
             witness = builder->emitLookupInterfaceMethodInst(
@@ -1642,12 +1657,19 @@ IRInst* DifferentiableTypeConformanceContext::emitDAddOfDiffInstType(
         auto diffDiffPairType = builder->getDifferentialPairUserCodeType(diffType, diffWitness);
         return builder->emitMakeDifferentialPairUserCode(diffDiffPairType, primal, diff);
     }
-    else if (as<IRInterfaceType>(primalType) || as<IRAssociatedType>(primalType))
+    else if (as<IRInterfaceType>(primalType))
     {
         // If our type is existential, we need to handle the case where
         // one or both of our operands are null-type.
         //
         return emitDAddForExistentialType(builder, primalType, op1, op2);
+    }
+    else if (as<IRAssociatedType>(primalType))
+    {
+        // Should not happen. associated type does not have any additional info, we can't
+        // lookup the necessary methods.
+        //
+        SLANG_UNEXPECTED("unexpected associated type during transposition");
     }
 
     auto addMethod = this->getAddMethodForType(builder, primalType);

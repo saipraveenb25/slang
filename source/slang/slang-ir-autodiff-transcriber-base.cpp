@@ -256,7 +256,7 @@ IRType* AutoDiffTranscriberBase::differentiateType(IRBuilder* builder, IRType* o
         return nullptr;
 
     // Special-case for differentiable existential types.
-    if (as<IRInterfaceType>(origType) || as<IRAssociatedType>(origType))
+    if (as<IRInterfaceType>(origType))
     {
         if (differentiableTypeConformanceContext.lookUpConformanceForType(
                 origType,
@@ -268,6 +268,10 @@ IRType* AutoDiffTranscriberBase::differentiateType(IRBuilder* builder, IRType* o
             return autoDiffSharedContext->differentiablePtrInterfaceType;
         else
             return nullptr;
+    }
+    else if (as<IRAssociatedType>(origType))
+    {
+        SLANG_UNEXPECTED("unexpected associated type during auto-diff");
     }
 
     auto primalType = lookupPrimalInst(builder, origType, origType);
@@ -324,9 +328,7 @@ IRType* AutoDiffTranscriberBase::_differentiateTypeImpl(IRBuilder* builder, IRTy
             auto primalPairType = as<IRDifferentialPairTypeBase>(primalType);
             return getOrCreateDiffPairType(
                 builder,
-                differentiableTypeConformanceContext.getDiffTypeFromPairType(
-                    builder,
-                    primalPairType),
+                differentiateType(builder, primalPairType->getValueType()),
                 differentiableTypeConformanceContext.getDiffTypeWitnessFromPairType(
                     builder,
                     primalPairType));
@@ -336,9 +338,7 @@ IRType* AutoDiffTranscriberBase::_differentiateTypeImpl(IRBuilder* builder, IRTy
         {
             auto primalPairType = as<IRDifferentialPairUserCodeType>(primalType);
             return builder->getDifferentialPairUserCodeType(
-                (IRType*)differentiableTypeConformanceContext.getDiffTypeFromPairType(
-                    builder,
-                    primalPairType),
+                differentiateType(builder, primalPairType->getValueType()),
                 differentiableTypeConformanceContext.getDiffTypeWitnessFromPairType(
                     builder,
                     primalPairType));
