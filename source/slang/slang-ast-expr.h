@@ -95,6 +95,18 @@ class IntegerLiteralExpr : public LiteralExpr
     IntegerLiteralValue value;
 };
 
+// An expression that wraps an IntVal* for representing compile-time integer values
+// This is used to simplify handling of various IntVal* subclasses in the codebase
+// Should not appear in user code.
+//
+class ConstantIntegerExpr : public Expr
+{
+    SLANG_AST_CLASS(ConstantIntegerExpr)
+
+    // The IntVal* being wrapped by this expression
+    IntVal* val = nullptr;
+};
+
 class FloatingPointLiteralExpr : public LiteralExpr
 {
     SLANG_AST_CLASS(FloatingPointLiteralExpr)

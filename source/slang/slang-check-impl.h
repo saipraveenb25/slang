@@ -1515,6 +1515,10 @@ public:
     void addDifferentiableTypeToDiffTypeRegistry(DeclRefType* type, SubtypeWitness* witness);
     void maybeRegisterDifferentiableTypeImplRecursive(ASTBuilder* builder, Type* type);
 
+    // Register derivative functions for a function being invoked
+    void maybeRegisterDerivativeFunctions(InvokeExpr* invokeExpr);
+
+
     // Construct the differential for 'type', if it exists.
     Type* getDifferentialType(ASTBuilder* builder, Type* type, SourceLoc loc);
     Type* tryGetDifferentialType(ASTBuilder* builder, Type* type);

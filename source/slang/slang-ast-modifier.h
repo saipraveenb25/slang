@@ -1403,12 +1403,75 @@ class DifferentiableAttribute : public Attribute
         }
     }
 
+    enum AssociationType
+    {
+        kAssociationType_ForwardDerivative,
+        kAssociationType_BackwardDerivative,
+    };
+
+    struct AssociationKey
+    {
+        AssociationType type;
+        DeclRefBase* func;
+
+        AssociationKey() = default;
+        AssociationKey(AssociationType type, DeclRefBase* func)
+            : type(type), func(func)
+        {
+        }
+
+        bool operator==(const AssociationKey& other) const
+        {
+            return type == other.type && func == other.func;
+        }
+
+        HashCode getHashCode() const
+        {
+            return combineHash(HashCode((int)type), func->getHashCode());
+        }
+    };
+
+    void addDerivativeFuncAssociation(
+        DeclRefBase* primalFunc,
+        DeclRefBase* derivativeFunc,
+        AssociationType associationType)
+    {
+        AssociationKey key(associationType, primalFunc);
+        m_derivativeFuncMap[key] = derivativeFunc;
+    }
+
+    DeclRefBase* getDerivativeFuncAssociation(
+        DeclRefBase* primalFunc,
+        AssociationType associationType)
+    {
+        AssociationKey key(associationType, primalFunc);
+        DeclRefBase* result = nullptr;
+        m_derivativeFuncMap.tryGetValue(key, result);
+        return result;
+    }
+
+    // Get all derivative associations for a given primal function.
+    // Returns a list of pairs containing the association type and the derivative function.
+    List<AssociationKey> getAllDerivativeFuncAssociations(DeclRefBase* primalFunc)
+    {
+        List<AssociationKey> result;
+        for (auto& pair : m_derivativeFuncMap)
+        {
+            if (pair.first.func == primalFunc)
+            {
+                result.add(pair.first);
+            }
+        }
+        return result;
+    }
+
     /// Mapping from types to subtype witnesses for conformance to IDifferentiable.
     const OrderedDictionary<DeclRefBase*, SubtypeWitness*>& getMapTypeToIDifferentiableWitness();
 
     SLANG_UNREFLECTED ValSet m_typeRegistrationWorkingSet;
 
 private:
+    Dictionary<AssociationKey, DeclRefBase*> m_derivativeFuncMap;
     OrderedDictionary<DeclRefBase*, SubtypeWitness*> m_mapToIDifferentiableWitness;
 };
 

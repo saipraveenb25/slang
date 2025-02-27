@@ -1529,12 +1529,19 @@ Expr* SemanticsVisitor::CheckTerm(Expr* term)
     auto checkedTerm = _CheckTerm(term);
     checkedTerm->checked = true;
 
-    // Differentiable type checking.
+    // Differentiable type & function-call checking.
     // TODO: This can be super slow.
     if (this->m_parentFunc && this->m_parentFunc->findModifier<DifferentiableAttribute>())
     {
         maybeRegisterDifferentiableType(getASTBuilder(), checkedTerm->type.type);
+
+        if (auto invokeExpr = as<InvokeExpr>(checkedTerm))
+        {
+            maybeRegisterDerivativeFunctions(invokeExpr);
+        }
     }
+
+
     return checkedTerm;
 }
 
@@ -2013,6 +2020,12 @@ IntVal* SemanticsVisitor::tryConstantFoldExpr(
     while (auto parenExpr = expr.as<ParenExpr>())
     {
         expr = getBaseExpr(parenExpr);
+    }
+
+    // Unwrap a ConstantIntegerExpr and return its stored IntVal* directly
+    if (auto constIntExpr = expr.as<ConstantIntegerExpr>())
+    {
+        return constIntExpr.getExpr()->val;
     }
 
     if (auto intLitExpr = expr.as<IntegerLiteralExpr>())
@@ -5565,5 +5578,138 @@ Expr* SemanticsExprVisitor::visitSPIRVAsmExpr(SPIRVAsmExpr* expr)
         expr->type = m_astBuilder->getVoidType();
 
     return expr;
+}
+
+// Register relevant derivative functions for a function being invoked
+void SemanticsVisitor::maybeRegisterDerivativeFunctions(InvokeExpr* invokeExpr)
+{
+    // Extract callee from invoke expr
+    auto callee = as<DeclRefExpr>(invokeExpr->functionExpr);
+    if (!callee)
+        return;
+
+    // Find all associated-decls for the callee.
+    auto associatedDecls = this->getShared()->getAssociatedDeclsForDecl(callee->declRef.getDecl());
+
+    // Lambda to determine the association type based on attributes
+    auto getAssociationType =
+        [](DeclAssociation* derivDecl) -> DifferentiableAttribute::AssociationType
+    {
+        switch (derivDecl->kind)
+        {
+        case DeclAssociationKind::ForwardDerivativeFunc:
+            return DifferentiableAttribute::AssociationType::kAssociationType_ForwardDerivative;
+        case DeclAssociationKind::BackwardDerivativeFunc:
+            return DifferentiableAttribute::AssociationType::kAssociationType_BackwardDerivative;
+        }
+
+        // Default to forward derivative if no specific attribute found
+        return DifferentiableAttribute::AssociationType::kAssociationType_ForwardDerivative;
+    };
+
+    // For each associated-decl, check if it has a differentiable attribute.
+    for (auto associatedDecl : associatedDecls)
+    {
+        auto derivDecl = associatedDecl->decl;
+
+        // If derivDecl is a regular funcDecl, simply add the default decl-ref to the map.
+
+        if (as<FuncDecl>(derivDecl))
+        {
+            m_parentDifferentiableAttr->addDerivativeFuncAssociation(
+                callee->declRef,
+                derivDecl->getDefaultDeclRef(),
+                getAssociationType(associatedDecl));
+        }
+        else if (auto genericDecl = as<GenericDecl>(derivDecl))
+        {
+            // Because of prior checking, we know that callee is a valid primal function for the
+            // derivative-decl.
+            //
+            // However, it is possible that the derivative may not apply to all specializations of
+            // the callee, E.g. foo<T : __BuiltinFloatingPointType>(T) can be associated with a
+            // foo_bwd<T :
+            // __BuiltinFloatingPointType>(T), but if `foo<T : __BuiltinArithmeticType>(T)` is also
+            // valid, then the derivative function may not be applicable.
+            //
+            // We'll try to verify that we are able to call the given derivative function with the
+            // given parameter types, by constructing GenericAppExpr(calleeDecl, genericArgs), where
+            // we'll copy over the generic arguments without the constraints. Then, we'll check
+            // this.
+            //
+            // If that works, then our genericDecl is applicable.
+            //
+
+            // Create a DeclRefExpr for the generic derivative declaration
+            auto derivDeclRef = genericDecl->getDefaultDeclRef();
+
+            auto derivDeclRefExpr = m_astBuilder->create<DeclRefExpr>();
+            derivDeclRefExpr->declRef = derivDeclRef;
+            derivDeclRefExpr->loc = derivDecl->loc;
+
+            auto substArgs = SubstitutionSet(callee->declRef);
+            auto genericAppExpr = m_astBuilder->create<GenericAppExpr>();
+            genericAppExpr->functionExpr = derivDeclRefExpr;
+
+            substArgs.forEachSubstitutionArg(
+                [&](Val* arg)
+                {
+                    // Create an appropriate Expr* from Val*
+                    Expr* argExpr = nullptr;
+
+                    if (auto typeArg = as<Type>(arg))
+                    {
+                        // If the Val* is a Type, wrap it in a SharedTypeExpr
+                        auto typeExpr = m_astBuilder->create<SharedTypeExpr>();
+                        auto typeType = m_astBuilder->getOrCreate<TypeType>(typeArg);
+                        typeExpr->type = typeType;
+                        argExpr = typeExpr;
+                    }
+                    else if (auto intArg = as<IntVal>(arg))
+                    {
+                        // For other IntVal* types, wrap in a ConstantIntegerExpr
+                        auto constIntExpr = m_astBuilder->create<ConstantIntegerExpr>();
+                        constIntExpr->type.type = intArg->getType();
+                        constIntExpr->val = intArg;
+                        argExpr = constIntExpr;
+                    }
+                    else if (auto subtypeWitness = as<SubtypeWitness>(arg))
+                    {
+                        // Skip.
+                        // Subtype witnesses need to be re-created based on
+                        // the target declRef. We may need a different set of
+                        // witnesses for the derivative.
+                        //
+                    }
+                    else
+                    {
+                        // Really shouldn't by anything other than a type or an intval.
+                        SLANG_UNREACHABLE("unhandledGenericArgType");
+                    }
+
+                    genericAppExpr->arguments.add(argExpr);
+                });
+
+            // Check this expression.
+            auto checkedAppExpr = CheckTerm(genericAppExpr);
+
+            if (IsErrorExpr(checkedAppExpr))
+            {
+                // If the generic application fails, this derivative method
+                // is not applicable.
+                //
+                continue;
+            }
+
+            if (auto declRefExpr = as<DeclRefExpr>(checkedAppExpr))
+            {
+                // If we resolved a proper decl-ref, then add the association.
+                m_parentDifferentiableAttr->addDerivativeFuncAssociation(
+                    callee->declRef,
+                    declRefExpr->declRef,
+                    getAssociationType(associatedDecl));
+            }
+        }
+    }
 }
 } // namespace Slang

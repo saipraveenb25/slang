@@ -11962,18 +11962,33 @@ void checkDerivativeOfAttributeImpl(
     TDerivativeOfAttr* derivativeOfAttr,
     DeclAssociationKind assocKind)
 {
+    // We're checking an attribute of the form `[DerivativeOf(funcExpr)]`,
+    // where `fn` may be an unresolved generic, overload or a member function.
+    //
+
     auto astBuilder = visitor->getASTBuilder();
-    DeclRef<Decl> calleeDeclRef;
-    DeclRefExpr* calleeDeclRefExpr = nullptr;
+
+    // Construct a "Differentiate(funcExpr)" expression.
     HigherOrderInvokeExpr* higherOrderFuncExpr = astBuilder->create<TDifferentiateExpr>();
     higherOrderFuncExpr->baseFunction = derivativeOfAttr->funcExpr;
+
+    // Update source-loc
     if (derivativeOfAttr->args.getCount() > 0)
         higherOrderFuncExpr->loc = derivativeOfAttr->args[0]->loc;
 
+    // Check this expression. This should turn `funcExpr` into either a
+    // DeclRef, a GenericDeclRef or an OverloadGroup.
+    //
+    // We allow static references to non-static members so that users can refer to
+    // member functions through "TypeName::memberName" syntax.
+    //
     Expr* checkedHigherOrderFuncExpr = visitor->dispatchExpr(
         higherOrderFuncExpr,
         visitor->allowStaticReferenceToNonStaticMember());
 
+    // If we can't resolve the expression at this stage, most likely there is no
+    // function in the current scope that matches the given token.
+    //
     if (!checkedHigherOrderFuncExpr)
     {
         visitor->getSink()->diagnose(
@@ -11981,6 +11996,14 @@ void checkDerivativeOfAttributeImpl(
             Diagnostics::cannotResolveOriginalFunctionForDerivative);
         return;
     }
+
+    // We'll use the higher-order function resolution machinery to further narrow down
+    // the funcExpr to a specific function, by constructing a set of imaginaryArguments
+    // that follow the current function decl's parameters.
+    //
+    // i.e. we create an InvokeExpr(DifferentiateExpr(funcExpr), imaginaryArgs)
+    // and check that.
+    //
     List<Expr*> imaginaryArgs =
         getImaginaryArgsToFunc(astBuilder, funcDecl, derivativeOfAttr->loc).args;
     auto invokeExpr =
@@ -11989,21 +12012,36 @@ void checkDerivativeOfAttributeImpl(
     auto ctx = visitor->withExprLocalScope(&scope);
     auto subVisitor = SemanticsVisitor(ctx);
     auto resolved = subVisitor.ResolveInvoke(invokeExpr);
+
+    // After this point, we'll try to extract an appropriate `DeclRef` from the
+    // resolved expression.
+    //
+
+    DeclRef<Decl> calleeDeclRef;
+    DeclRefExpr* calleeDeclRefExpr = nullptr;
+
+    // Try to extract a DeclRefExpr from the resolved expression.
     if (auto resolvedInvoke = as<InvokeExpr>(resolved))
     {
         auto resolvedFuncExpr = as<HigherOrderInvokeExpr>(resolvedInvoke->functionExpr);
         if (resolvedFuncExpr)
         {
-            calleeDeclRefExpr = as<DeclRefExpr>(resolvedFuncExpr->baseFunction);
-            if (!calleeDeclRef && as<OverloadedExpr>(resolvedFuncExpr->baseFunction))
+            // If its still overloaded, we can't proceed.
+            if (as<OverloadedExpr>(resolvedFuncExpr->baseFunction))
             {
                 visitor->getSink()->diagnose(
                     derivativeOfAttr,
                     Diagnostics::overloadedFuncUsedWithDerivativeOfAttributes);
             }
+
+            // Success (if calleeDeclRefExpr is not null)
+            calleeDeclRefExpr = as<DeclRefExpr>(resolvedFuncExpr->baseFunction);
         }
     }
 
+    // General error if the resolved expression is not of the
+    // form InvokeExpr(HigherOrderInvokeExpr(funcExpr), ...).
+    //
     if (!calleeDeclRefExpr)
     {
         visitor->getSink()->diagnose(
@@ -12012,12 +12050,15 @@ void checkDerivativeOfAttributeImpl(
         return;
     }
 
+    // Update source-loc
     calleeDeclRefExpr->loc = higherOrderFuncExpr->loc;
     if (derivativeOfAttr->args.getCount() > 0)
         derivativeOfAttr->args[0] = calleeDeclRefExpr;
 
+    // Extract the DeclRef from the DeclRefExpr.
     calleeDeclRef = calleeDeclRefExpr->declRef;
 
+    // The DeclRef could be a FunctionDeclBase, or a GenericDecl.
     auto calleeFunc = as<FunctionDeclBase>(calleeDeclRef.getDecl());
 
     if (!calleeFunc)
@@ -12025,6 +12066,7 @@ void checkDerivativeOfAttributeImpl(
         // If we couldn't find a direct function, it might be a generic.
         if (auto genericDecl = as<GenericDecl>(calleeDeclRef.getDecl()))
         {
+            // This case should really not be hit.
             calleeFunc = as<FunctionDeclBase>(genericDecl->inner);
 
             if (as<ErrorType>(resolved->type.type))
@@ -12048,13 +12090,7 @@ void checkDerivativeOfAttributeImpl(
         return;
     }
 
-    // For now, if calleeFunc or funcDecl is nested inside some generic aggregate,
-    // they must be the same generic decl. For example, using B<T>.f() as the original function
-    // for C<T>.derivative() is not allowed.
-    // We may relax this restriction in the future by solving the "inverse" generic arguments
-    // from the `calleeDeclRef`, and use them to create a declRef to funcDecl from the original
-    // func.
-
+    // Interface requirements are not allowed to be used with derivative attributes.
     if (isInterfaceRequirement(calleeFunc))
     {
         visitor->getSink()->diagnose(
@@ -12070,6 +12106,7 @@ void checkDerivativeOfAttributeImpl(
         return;
     }
 
+    // Check for any existing attributes.
     if (auto existingModifier = _findModifier<TDerivativeAttr>(calleeFunc))
     {
         // The primal function already has a `[*Derivative]` attribute, this is invalid.
@@ -12084,14 +12121,29 @@ void checkDerivativeOfAttributeImpl(
             calleeDeclRef.getDecl());
     }
 
+    // We'll insert a new attribute of the form `[DerivativeDefinition(derivFuncDecl)]`
+    // into the callee function.
+    //
+    auto derivativeDefinitionAttr = astBuilder->create<DerivativeDefinitionAttribute>();
+    derivativeDefinitionAttr->funcDecl = calleeFunc;
+    calleeFunc->addModifier(derivativeDefinitionAttr);
+
+    // For now, if calleeFunc or funcDecl is nested inside some generic aggregate,
+    // they must be the same generic decl. For example, using B<T>.f() as the original function
+    // for C<T>.derivative() is not allowed.
+    // We may relax this restriction in the future by solving the "inverse" generic arguments
+    // from the `calleeDeclRef`, and use them to create a declRef to funcDecl from the original
+    // func.
+
+    // We'll create a new attribute of the form `[Derivative(derivFuncExpr)]`, and check that from
+    // the perspective of the target (calleeFunc).
+    //
     derivativeOfAttr->funcExpr = calleeDeclRefExpr;
     auto derivativeAttr = astBuilder->create<TDerivativeAttr>();
     derivativeAttr->loc = derivativeOfAttr->loc;
     auto outterGeneric = visitor->GetOuterGeneric(funcDecl);
     auto declRef = makeDeclRef<Decl>((outterGeneric ? (Decl*)outterGeneric : funcDecl));
 
-    // If both the derivative and the original function are defined in the same outer generic
-    // aggregate type, we want to form a full declref with default arguments.
     declRef = createDefaultSubstitutionsIfNeeded(astBuilder, visitor, declRef);
 
     auto declRefExpr = visitor->ConstructDeclRefExpr(
