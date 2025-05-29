@@ -3403,7 +3403,8 @@ struct AutoDiffPass : public InstPassBase
                 case kIROp_BackwardDifferentiatePrimal:
                     {
                         auto baseFunc = differentiateInst->getOperand(0);
-                        diffFunc = backwardPrimalTranscriber.transcribe(&subBuilder, baseFunc);
+                        // diffFunc = backwardPrimalTranscriber.transcribe(&subBuilder, baseFunc);
+                        diffFunc = backwardPrimalTranscriber.processInst(differentiateInst);
                     }
                     break;
                 case kIROp_BackwardDifferentiatePropagate:

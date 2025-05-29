@@ -1307,7 +1307,7 @@ Type* SemanticsVisitor::resolveType(Type* type)
 
                 auto resultType = funcType->getResultType();
 
-                // Look up "This.FwdCallable" in the current scope.
+                // Look up "This.BwdCallable" in the current scope.
                 //
                 // Build the right member-expr.
                 //
@@ -2938,6 +2938,34 @@ bool SemanticsVisitor::trySynthesizeForwardDiffFuncTypeRequirementWitness(
     witnessTable->add(requirementDeclRef.getDecl(), RequirementWitness(resultType));
 
     return true;
+}
+
+bool SemanticsVisitor::trySynthesizeBwdContextTypeRequirementWitness(
+    ConformanceCheckingContext* context,
+    DeclRef<AssocTypeDecl> requirementDeclRef,
+    RefPtr<WitnessTable> witnessTable)
+{
+    // Can't synthesize for non-callable base types.
+    if (!isDeclRefTypeOf<FunctionDeclBase>(context->conformingType))
+        return false;
+
+    auto synStructDecl = getCurrentASTBuilder()->create<SynthesizedStructDecl>();
+    synStructDecl->irOp = kIROp_BackwardDiffIntermediateContextType;
+    synStructDecl->targetFuncDeclRef =
+        as<DeclRefType>(context->conformingType)->getDeclRef().as<FunctionDeclBase>();
+
+    // Insert an InheritanceDecl for SynStruct : IBwdCallable<Self>
+    auto bwdCallableInheritanceDecl = getCurrentASTBuilder()->create<InheritanceDecl>();
+    bwdCallableInheritanceDecl->parentDecl = synStructDecl;
+    bwdCallableInheritanceDecl->base.type =
+        getCurrentASTBuilder()->getBwdCallableBaseType(context->conformingType);
+    synStructDecl->members.add(bwdCallableInheritanceDecl);
+
+    checkAggTypeConformance(synStructDecl);
+
+    witnessTable->add(
+        requirementDeclRef.getDecl(),
+        RequirementWitness(synStructDecl->getDefaultDeclRef()));
 }
 
 bool SemanticsVisitor::trySynthesizeDifferentialAssociatedTypeRequirementWitness(
@@ -6674,15 +6702,13 @@ bool SemanticsVisitor::trySynthesizeRequirementWitness(
                         builtinAttr->kind);
                 break;
             case BuiltinRequirementKind::ForwardDerivativeFunc:
-                return trySynthesizeForwardDiffFuncRequirementWitness(
+            case BuiltinRequirementKind::BwdApplyFunc:
+            case BuiltinRequirementKind::BwdCallablePropFunc:
+            case BuiltinRequirementKind::BwdCallableGetValFunc:
+                return trySynthesizeDiffFuncRequirementWitness(
                     context,
                     requiredFuncDeclRef,
                     witnessTable);
-                break;
-            case BuiltinRequirementKind::BwdCallableContextType:
-            case BuiltinRequirementKind::BwdApplyFunc:
-                // Not implemented yet.
-                return false;
                 break;
             }
         }
@@ -6754,6 +6780,12 @@ bool SemanticsVisitor::trySynthesizeRequirementWitness(
                     context,
                     requiredAssocTypeDeclRef,
                     witnessTable);
+            case BuiltinRequirementKind::BwdCallableContextType:
+                return trySynthesizeBwdContextTypeRequirementWitness(
+                    context,
+                    requiredAssocTypeDeclRef,
+                    witnessTable);
+                break;
             }
         }
         else
@@ -6924,7 +6956,7 @@ bool SemanticsVisitor::trySynthesizeEnumTypeMethodRequirementWitness(
     return true;
 }
 
-bool SemanticsVisitor::trySynthesizeForwardDiffFuncRequirementWitness(
+bool SemanticsVisitor::trySynthesizeDiffFuncRequirementWitness(
     ConformanceCheckingContext* context,
     DeclRef<Decl> requirementDeclRef,
     RefPtr<WitnessTable> witnessTable)
@@ -6961,10 +6993,30 @@ bool SemanticsVisitor::trySynthesizeForwardDiffFuncRequirementWitness(
 
     synFunc->returnType.type = funcType->getResultType();
 
-    // Add static modifier
-    addModifier(synFunc, m_astBuilder->create<HLSLStaticModifier>());
+    // Add static modifier if necessary
+    if (requirementDeclRef.getDecl()->hasModifier<HLSLStaticModifier>())
+        addModifier(synFunc, m_astBuilder->create<HLSLStaticModifier>());
 
-    synFunc->irOp = kIROp_ForwardDifferentiate;
+    auto builtinAttr = requirementDeclRef.getDecl()->findModifier<BuiltinRequirementModifier>();
+
+    switch (builtinAttr->kind)
+    {
+    case BuiltinRequirementKind::ForwardDerivativeFunc:
+        synFunc->irOp = kIROp_ForwardDifferentiate;
+        break;
+    case BuiltinRequirementKind::BwdApplyFunc:
+        synFunc->irOp = kIROp_BackwardDifferentiatePrimal;
+        break;
+    case BuiltinRequirementKind::BwdCallablePropFunc:
+        synFunc->irOp = kIROp_BackwardDifferentiatePropagate;
+        break;
+    case BuiltinRequirementKind::BwdCallableGetValFunc:
+        synFunc->irOp = kIROp_BackwardContextGetPrimalVal;
+        break;
+    default:
+        SLANG_UNEXPECTED("unknown builtin requirement kind.");
+    }
+
     synFunc->targetFuncDeclRef = funcDeclRef;
 
     context->parentDecl->members.add(synFunc);

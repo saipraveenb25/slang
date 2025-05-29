@@ -9707,6 +9707,24 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
                 return LoweredValInfo();
             }
         }
+        else if (auto synStructDecl = as<SynthesizedStructDecl>(decl))
+        {
+            FuncDeclBaseTypeInfo innerInfo;
+            _lowerFuncDeclBaseTypeInfo(subContext, synStructDecl->targetFuncDeclRef, innerInfo);
+
+            auto targetDeclRefInfo =
+                emitDeclRef(subContext, synStructDecl->targetFuncDeclRef, innerInfo.type);
+
+            SLANG_ASSERT(targetDeclRefInfo.flavor == LoweredValInfo::Flavor::Simple);
+            auto _targetIRFunc = getSimpleVal(subContext, targetDeclRefInfo);
+            auto synthOp = subBuilder->emitIntrinsicInst(
+                subBuilder->getTypeKind(),
+                (IROp)synStructDecl->irOp,
+                1,
+                &_targetIRFunc);
+
+            irAggType = (IRType*)synthOp;
+        }
         else
         {
             getSink()->diagnose(

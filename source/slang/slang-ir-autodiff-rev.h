@@ -44,14 +44,148 @@ struct ParameterBlockTransposeInfo
     IRInst* dOutParam;
 };
 
+// AD 2.0 version.
+struct BackwardDiffTranslator
+{
+    // Keep track of global insts that have already been translated.
+    Dictionary<IRGlobalValueWithCode*, BackwardDiffTranslationFuncContext::Result> translationCache;
+
+    IRInst* getBaseForTranslateInst(IRInst* inst)
+    {
+        switch (inst->getOp())
+        {
+        case kIROp_BackwardDifferentiate:
+        case kIROp_BackwardDifferentiatePrimal:
+        case kIROp_BackwardDifferentiatePropagate:
+        case kIROp_BackwardContextGetPrimalVal:
+            return inst->getOperand(0);
+        default:
+            return nullptr;
+        }
+    }
+
+    IRInst* processTranslationRequest(
+        IRInst* translateInst,
+        AutoDiffSharedContext* sharedContext,
+        DiagnosticSink* sink)
+    {
+        auto baseInst = getBaseForTranslateInst(translateInst);
+
+        auto globalValToTranslate =
+            as<IRGlobalValueWithCode>(getResolvedInstForDecorations(baseInst));
+        if (!globalValToTranslate)
+        {
+            // TODO: diagnose
+            SLANG_UNEXPECTED("Expected a global value with code for backward differentiation.");
+        }
+
+        auto extractRelevantGlobalVal = [&](BackwardDiffTranslationFuncContext::Result) -> IRInst*
+        {
+            auto translationResult = translationCache[globalValToTranslate];
+            switch (translateInst->getOp())
+            {
+            case kIROp_BackwardDifferentiate:
+                return translationResult.bwdApplyFunc;
+            case kIROp_BackwardDifferentiatePrimal:
+                return translationResult.bwdPropFunc;
+            case kIROp_BackwardDifferentiatePropagate:
+                return translationResult.bwdValFunc;
+            case kIROp_BackwardContextGetPrimalVal:
+                return translationResult.bwdContextType;
+            default:
+                SLANG_UNEXPECTED("Unexpected backward differentiation operation.");
+            }
+        };
+
+        if (translationCache.containsKey(globalValToTranslate))
+        {
+            // If we already have a translation for this function, return the requested value.
+            return extractRelevantGlobalVal(translationCache[globalValToTranslate]);
+        }
+
+        // Create a new context for the translation.
+        BackwardDiffTranslationFuncContext context(globalValToTranslate, sharedContext, sink);
+        IRBuilder builder(sharedContext->moduleInst);
+        builder.setInsertAfter(globalValToTranslate);
+
+        BackwardDiffTranslationFuncContext::Result translationResult = context.translate(&builder);
+        translationCache.add(globalValToTranslate, translationResult);
+
+        return extractRelevantGlobalVal(translationResult);
+    }
+};
+
+IRGlobalValueWithCode* createFuncFromFuncType(IRBuilder* builder, IRFuncType* funcType)
+{
+    auto func = builder->createFunc();
+    builder->setInsertInto(func);
+    func->setFullType(funcType);
+
+    /*
+    builder->createBlock();
+    builder->setInsertInto(func->getFirstBlock());
+    for (auto paramType : funcType->getParamTypes())
+    {
+        builder->emitParam(paramType);
+    }
+    */
+
+    return func;
+}
+
+// Triggers the actual pass.
+struct BackwardDiffTranslationFuncContext
+{
+    struct Result
+    {
+        IRGlobalValueWithCode* bwdApplyFunc = nullptr;
+        IRGlobalValueWithCode* bwdPropFunc = nullptr;
+        IRGlobalValueWithCode* bwdValFunc = nullptr;
+        IRType* bwdContextType = nullptr;
+    };
+
+    // Shared context holding on to interface definitions, etc..
+    AutoDiffSharedContext* sharedContext;
+
+    // Differentiable type conformance context.
+    DifferentiableTypeConformanceContext diffTypeContext;
+
+    // The function to transcribe.
+    IRGlobalValueWithCode* targetFunc;
+
+    // The diagnostic sink to report errors.
+    DiagnosticSink* sink;
+
+    BackwardDiffTranslationFuncContext(
+        IRGlobalValueWithCode* targetFunc,
+        AutoDiffSharedContext* shared,
+        DiagnosticSink* sink)
+        : sharedContext(shared), diffTypeContext(shared), targetFunc(targetFunc), sink(sink)
+    {
+        diffTypeContext.setFunc(as<IRGlobalValueWithCode>(targetFunc));
+    }
+
+    Result translate(IRBuilder* builder)
+    {
+        // TODO: This is a temporary redirect into the old solution.. once we
+        // know things work, we can just move the logic into this class.
+
+        // Do the reverse-mode translation & return the 4-tuple result.
+        BackwardDiffPropagateTranscriber transcriber(sharedContext, sink);
+
+        IRFunc* bwdPrimalFunc;
+        IRFunc* bwdPropagateFunc;
+        IRFunc* bwdContextGetValFunc;
+        transcriber
+            .transcribeFuncImpl(builder, bwdPrimalFunc, bwdPropagateFunc, bwdContextGetValFunc);
+
+        return {bwdPrimalFunc, bwdPropagateFunc, bwdContextGetValFunc, nullptr};
+    }
+};
+
 struct BackwardDiffTranscriberBase : AutoDiffTranscriberBase
 {
     FuncBodyTranscriptionTaskType diffTaskType;
-
-    // Map that stores the upper gradient given an IRInst*
-    Dictionary<IRInst*, List<IRInst*>> upperGradients;
-    Dictionary<IRInst*, IRInst*> primalToDiffPair;
-    Dictionary<IRInst*, IRInst*> orginalToTranscribed;
 
     // References to other passes that for reverse-mode transcription.
     DiffTransposePass* diffTransposePass;
@@ -147,6 +281,8 @@ struct BackwardDiffTranscriberBase : AutoDiffTranscriberBase
     {
         return kIROp_BackwardDerivativeDecoration;
     }
+
+    virtual IRInst* processTranslationRequest(IRInst* inst) override;
 };
 
 struct BackwardDiffPrimalTranscriber : BackwardDiffTranscriberBase
@@ -193,7 +329,19 @@ struct BackwardDiffPrimalTranscriber : BackwardDiffTranscriberBase
             return builder->getStringValue(String("s_primal_ctx_anonymous").getUnownedSlice());
         }
     }
+
+    // AD 2.0 translation-request-based functions.
+    virtual IRInst* processTranslationRequest(IRInst* inst) override
+    {
+        auto backwardDiffPrimalInst = cast<IRBackwardDifferentiatePrimal>(inst);
+        auto baseFn = as<IRFunc>(backwardDiffPrimalInst->getBaseFn());
+        if (!baseFn)
+        {
+            SLANG_UNEXPECTED("backward-differentiate-primal should have a base function");
+        }
+    }
 };
+
 
 struct BackwardDiffPropagateTranscriber : BackwardDiffTranscriberBase
 {

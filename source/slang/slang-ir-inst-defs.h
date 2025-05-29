@@ -1271,6 +1271,9 @@ INST(BackwardDifferentiatePrimal,            BackwardDifferentiatePrimal,     1,
 // primal func produced from `BackwardDifferentiatePrimal`.
 INST(BackwardDifferentiatePropagate,         BackwardDifferentiatePropagate,  1, 0)
 
+// AD 2.0 inst to get the primal value from the backward context.
+INST(BackwardContextGetPrimalVal,            BackwardContextGetPrimalVal,     1, 0)
+
 // Represents the conceptual backward derivative function. Only produced by lower-to-ir and will be
 // replaced with `BackwardDifferentiatePrimal` and `BackwardDifferentiatePropagate`.
 INST(BackwardDifferentiate, BackwardDifferentiate, 1, 0)

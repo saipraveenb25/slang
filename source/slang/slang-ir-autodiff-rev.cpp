@@ -784,7 +784,8 @@ static void _unlockPrimalParamReplacementInsts(ParameterBlockTransposeInfo& para
 void BackwardDiffTranscriberBase::transcribeFuncImpl(
     IRBuilder* builder,
     IRFunc* primalFunc,
-    IRFunc* diffPropagateFunc)
+    IRFunc* diffPropagateFunc,
+    IRFunc* bwdContextGetValFunc)
 {
     SLANG_ASSERT(primalFunc);
     SLANG_ASSERT(diffPropagateFunc);
@@ -1050,6 +1051,15 @@ ParameterBlockTransposeInfo BackwardDiffTranscriberBase::splitAndTransposeParame
     // - mapPrimalSpecificParamToReplacementInPropFunc[param]. What should all references to this
     // parameter
     //      from the primal compuation logic in the future propagate function be replaced to.
+
+    auto ctxParam = builder->emitParam(as<IRFuncType>(diffFunc->getDataType())->getParamType(0));
+    builder->addNameHintDecoration(ctxParam, UnownedStringSlice("_s_diff_ctx"));
+    builder->addDecoration(ctxParam, kIROp_PrimalContextDecoration);
+    result.propagateFuncParams.add(ctxParam);
+
+    diffFunc->sourceLoc = primalLoc;
+    ctxParam->sourceLoc = primalLoc;
+
     for (auto fwdParam : fwdParams)
     {
         IRBuilderSourceLocRAII sourceLocationScope(builder, fwdParam->sourceLoc);
@@ -1076,200 +1086,295 @@ ParameterBlockTransposeInfo BackwardDiffTranscriberBase::splitAndTransposeParame
                 builder,
                 diffPairType);
         }
-
-        // Now we handle each combination of parameter direction x differentiability.
-        if (outType)
+        else
         {
-            // Case 1: out parameters.
-            // Out parameters need to be handled differently whether or not it is differentiable,
-            // since the propagate function will not have a corresponding output.
-            if (diffPairType)
+            primalType = fwdParam->getDataType();
+
+            if (auto outType = as<IROutType>(primalType))
+                primalType = outType->getValueType();
+            else if (auto inoutType = as<IRInOutType>(primalType))
+                primalType = inoutType->getValueType();
+        }
+
+        // AD 2.0 logic (significantly simplified)
+        // If the parameter is a relevant differential pair, we
+        // put the primal component in the primal function and the diff component
+        // in the propagate function.
+        // If it's not relevant, then we replace it with a none-type parameter.
+        //
+        switch (fwdParam->getDataType()->getOp())
+        {
+        case kIROp_OutType:
+            // Out.
+            if (diffType)
             {
-                // Create dOut param.
-                auto diffParam = builder->emitParam(diffType);
-                copyNameHintAndDebugDecorations(diffParam, fwdParam);
-                result.propagateFuncParams.add(diffParam);
-                primalRefReplacement = builder->emitParam(builder->getOutType(primalType));
-                copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
-
-                // Create a local var for read access in pre-transpose code.
-                // This will the var from which we will fetch the final resulting derivative
-                // after transposition.
-                auto tempVar = nextBlockBuilder.emitVar(diffType);
-                copyNameHintAndDebugDecorations(tempVar, fwdParam);
-                result.propagateFuncSpecificPrimalInsts.add(tempVar);
-
-                // Initialize the var with input diff param at start.
-                // Note that we insert the store in the primal block so it won't get transposed.
-                auto storeInst = nextBlockBuilder.emitStore(tempVar, diffParam);
-                nextBlockBuilder.markInstAsDifferential(storeInst, primalType);
-                // Since this store inst is specific to propagate function, we track it in a
-                // set so we can remove it when we generate the primal func.
-                result.propagateFuncSpecificPrimalInsts.add(storeInst);
-
-                diffWriteRefReplacement = tempVar;
-                diffRefReplacement = tempVar;
+                diffRefReplacement = builder->emitParam(diffType); // In diff.
+                result.propagateFuncParams.add(diffRefReplacement);
+                copyNameHintAndDebugDecorations(diffRefReplacement, fwdParam);
+                diffWriteRefReplacement = nullptr;
             }
             else
             {
-                primalRefReplacement = builder->emitParam(outType);
-                copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
+                // NoneType parameter.
+                result.propagateFuncParams.add(builder->emitParam(builder->getVoidType()));
             }
+
+            primalRefReplacement = builder->emitParam( // Out primal.
+                builder->getOutType(primalType));
             result.primalFuncParams.add(primalRefReplacement);
+            copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
 
-            // Create a local var for the out param for the primal part of the prop func.
-            auto tempPrimalVar = nextBlockBuilder.emitVar(outType->getValueType());
-            copyNameHintAndDebugDecorations(tempPrimalVar, fwdParam);
-            result.mapPrimalSpecificParamToReplacementInPropFunc[primalRefReplacement] =
-                tempPrimalVar;
+            break;
 
-            instsToRemove.add(fwdParam);
-        }
-        else if (!isRelevantDifferentialPair(fwdParam->getDataType()))
-        {
-            if (inoutType)
+        case kIROp_InOutType:
+            // In Out.
+            if (diffType)
             {
-                // Case 2: non differentiable inout parameter.
-                // They should become an inout parameter in primal func, but an in parameter in
-                // bwd func.
-                fwdParam->removeFromParent();
-                fwdDiffParameterBlock->addParam(fwdParam);
-                result.primalFuncParams.add(fwdParam);
+                auto diffParam = builder->emitParam(builder->getInOutType(diffType)); // InOut diff.
+                result.propagateFuncParams.add(diffParam);
+                copyNameHintAndDebugDecorations(diffParam, fwdParam);
 
-                primalRefReplacement = fwdParam;
+                diffRefReplacement = diffParam;
+                diffWriteRefReplacement = diffParam;
+            }
+            else
+            {
+                // NoneType parameter.
+                result.propagateFuncParams.add(builder->emitParam(builder->getVoidType()));
+            }
 
-                // Create an in param for the prop func.
-                auto propParam = builder->emitParam(inoutType->getValueType());
+            primalRefReplacement =
+                builder->emitParam(builder->getInOutType(primalType)); // InOut primal.
+            result.primalFuncParams.add(primalRefReplacement);
+            break;
+
+        case kIROp_RefType:
+        case kIROp_ConstRefType:
+            SLANG_UNEXPECTED("Unexpected ref/constref type in backward diff transcriber");
+            break;
+
+        default:
+            // In.
+
+            if (diffPairType)
+            {
+                auto diffParam = builder->emitParam(builder->getOutType(diffType)); // Out diff.
+                result.propagateFuncParams.add(diffParam);
+                diffWriteRefReplacement = diffParam;
+                diffRefReplacement = nullptr;
+            }
+            else
+            {
+                // NoneType parameter.
+                result.propagateFuncParams.add(builder->emitParam(builder->getVoidType()));
+            }
+
+            primalRefReplacement = builder->emitParam(primalType); // Out primal.
+            result.primalFuncParams.add(primalRefReplacement);
+            break;
+        }
+
+        // Now we handle each combination of parameter direction x differentiability.
+        // TODO: Temporarily disabled.
+        // Remove after AD 2.0 (above) is working
+        if (false)
+        {
+            if (outType)
+            {
+                // Case 1: out parameters.
+                // Out parameters need to be handled differently whether or not it is
+                // differentiable, since the propagate function will not have a corresponding
+                // output.
+                if (diffPairType)
+                {
+                    // Create dOut param.
+                    auto diffParam = builder->emitParam(diffType);
+                    copyNameHintAndDebugDecorations(diffParam, fwdParam);
+                    result.propagateFuncParams.add(diffParam);
+                    primalRefReplacement = builder->emitParam(builder->getOutType(primalType));
+                    copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
+
+                    // Create a local var for read access in pre-transpose code.
+                    // This will the var from which we will fetch the final resulting derivative
+                    // after transposition.
+                    auto tempVar = nextBlockBuilder.emitVar(diffType);
+                    copyNameHintAndDebugDecorations(tempVar, fwdParam);
+                    result.propagateFuncSpecificPrimalInsts.add(tempVar);
+
+                    // Initialize the var with input diff param at start.
+                    // Note that we insert the store in the primal block so it won't get transposed.
+                    auto storeInst = nextBlockBuilder.emitStore(tempVar, diffParam);
+                    nextBlockBuilder.markInstAsDifferential(storeInst, primalType);
+                    // Since this store inst is specific to propagate function, we track it in a
+                    // set so we can remove it when we generate the primal func.
+                    result.propagateFuncSpecificPrimalInsts.add(storeInst);
+
+                    diffWriteRefReplacement = tempVar;
+                    diffRefReplacement = tempVar;
+                }
+                else
+                {
+                    primalRefReplacement = builder->emitParam(outType);
+                    copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
+                }
+                result.primalFuncParams.add(primalRefReplacement);
+
+                // Create a local var for the out param for the primal part of the prop func.
+                auto tempPrimalVar = nextBlockBuilder.emitVar(outType->getValueType());
+                copyNameHintAndDebugDecorations(tempPrimalVar, fwdParam);
+                result.mapPrimalSpecificParamToReplacementInPropFunc[primalRefReplacement] =
+                    tempPrimalVar;
+
+                instsToRemove.add(fwdParam);
+            }
+            else if (!isRelevantDifferentialPair(fwdParam->getDataType()))
+            {
+                if (inoutType)
+                {
+                    // Case 2: non differentiable inout parameter.
+                    // They should become an inout parameter in primal func, but an in parameter in
+                    // bwd func.
+                    fwdParam->removeFromParent();
+                    fwdDiffParameterBlock->addParam(fwdParam);
+                    result.primalFuncParams.add(fwdParam);
+
+                    primalRefReplacement = fwdParam;
+
+                    // Create an in param for the prop func.
+                    auto propParam = builder->emitParam(inoutType->getValueType());
+                    copyNameHintAndDebugDecorations(propParam, fwdParam);
+                    result.propagateFuncParams.add(propParam);
+
+                    // Create a local var for the out param for the primal part of the prop func.
+                    auto tempPrimalVar = nextBlockBuilder.emitVar(inoutType->getValueType());
+                    copyNameHintAndDebugDecorations(tempPrimalVar, fwdParam);
+
+                    result.propagateFuncSpecificPrimalInsts.add(tempPrimalVar);
+                    auto storeInst = nextBlockBuilder.emitStore(tempPrimalVar, propParam);
+                    result.propagateFuncSpecificPrimalInsts.add(storeInst);
+                    result.mapPrimalSpecificParamToReplacementInPropFunc[primalRefReplacement] =
+                        tempPrimalVar;
+                }
+                else
+                {
+                    // Case 3: non differentiable, non output parameters.
+                    // If parameter is not an out param and has nothing to do with differentiation,
+                    // simply move the parameter to the end.
+                    //
+                    fwdParam->removeFromParent();
+                    fwdDiffParameterBlock->addParam(fwdParam);
+                    result.primalFuncParams.add(fwdParam);
+                    result.propagateFuncParams.add(fwdParam);
+                    continue;
+                }
+            }
+            else if (!inoutType)
+            {
+                // Case 4: `in` differentiable parameters.
+
+                SLANG_RELEASE_ASSERT(diffPairType);
+
+                // Create inout version.
+                auto inoutDiffPairType = builder->getInOutType(diffPairType);
+                primalRefReplacement = builder->emitParam(primalType);
+                copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
+
+                result.primalFuncParams.add(primalRefReplacement);
+                auto propParam = builder->emitParam(inoutDiffPairType);
                 copyNameHintAndDebugDecorations(propParam, fwdParam);
                 result.propagateFuncParams.add(propParam);
 
-                // Create a local var for the out param for the primal part of the prop func.
-                auto tempPrimalVar = nextBlockBuilder.emitVar(inoutType->getValueType());
-                copyNameHintAndDebugDecorations(tempPrimalVar, fwdParam);
+                // A reference to this parameter from the diff blocks should be replaced with a load
+                // of the differential component of the pair.
+                auto newParamLoad = diffBuilder.emitLoad(propParam);
+                diffBuilder.markInstAsDifferential(newParamLoad, primalType);
+                result.propagateFuncSpecificPrimalInsts.add(newParamLoad);
 
-                result.propagateFuncSpecificPrimalInsts.add(tempPrimalVar);
-                auto storeInst = nextBlockBuilder.emitStore(tempPrimalVar, propParam);
-                result.propagateFuncSpecificPrimalInsts.add(storeInst);
+                diffRefReplacement =
+                    diffBuilder.emitDifferentialPairGetDifferential(diffType, newParamLoad);
+                diffBuilder.markInstAsDifferential(diffRefReplacement, primalType);
+                result.propagateFuncSpecificPrimalInsts.add(diffRefReplacement);
+
+                // Load the primal component from the prop param and use it as replacement for the
+                // primal param in the primal part of the prop func.
+                // Since these are logic specific to propagate function, we will add them to the
+                // `propagateFuncSpecificPrimalInsts` set so we can remove them when we generate the
+                // primal func.
+                auto primalReplacementLoad = nextBlockBuilder.emitLoad(propParam);
+                result.propagateFuncSpecificPrimalInsts.add(primalReplacementLoad);
+                auto primalVal =
+                    nextBlockBuilder.emitDifferentialPairGetPrimal(primalReplacementLoad);
+                result.propagateFuncSpecificPrimalInsts.add(primalVal);
                 result.mapPrimalSpecificParamToReplacementInPropFunc[primalRefReplacement] =
-                    tempPrimalVar;
+                    primalVal;
+
+                instsToRemove.add(fwdParam);
             }
             else
             {
-                // Case 3: non differentiable, non output parameters.
-                // If parameter is not an out param and has nothing to do with differentiation,
-                // simply move the parameter to the end.
-                //
-                fwdParam->removeFromParent();
-                fwdDiffParameterBlock->addParam(fwdParam);
-                result.primalFuncParams.add(fwdParam);
-                result.propagateFuncParams.add(fwdParam);
-                continue;
+                // Case 5: `inout` differentiable parameters.
+                SLANG_ASSERT(inoutType && diffPairType);
+
+                // Process differentiable inout parameters.
+                auto primalParam = builder->emitParam(builder->getInOutType(primalType));
+                copyNameHintAndDebugDecorations(primalParam, fwdParam);
+                result.primalFuncParams.add(primalParam);
+
+                auto diffParam = builder->emitParam(inoutType);
+                copyNameHintAndDebugDecorations(diffParam, fwdParam);
+                result.propagateFuncParams.add(diffParam);
+
+                // Primal references to this param is the new primal param.
+                primalRefReplacement = primalParam;
+
+                // Diff references to this param should be replaced with one local temp var
+                // for read and one separate temp var for write.
+
+                // Load the inital diff value.
+                auto loadedParam = nextBlockBuilder.emitLoad(diffParam);
+                result.propagateFuncSpecificPrimalInsts.add(loadedParam);
+
+                auto initDiff =
+                    nextBlockBuilder.emitDifferentialPairGetDifferential(diffType, loadedParam);
+                result.propagateFuncSpecificPrimalInsts.add(initDiff);
+
+                // Create a local var for diff read access.
+                auto diffVar = nextBlockBuilder.emitVar(diffType);
+                copyNameHintAndDebugDecorations(diffVar, fwdParam);
+                result.propagateFuncSpecificPrimalInsts.add(diffVar);
+                diffRefReplacement = diffVar;
+
+                // Clear the diff read var to zero at start of the function.
+                auto dzero = getDifferentialZeroOfType(&nextBlockBuilder, primalType);
+                result.propagateFuncSpecificPrimalInsts.add(dzero);
+                auto initDiffStore = nextBlockBuilder.emitStore(diffVar, dzero);
+                result.propagateFuncSpecificPrimalInsts.add(initDiffStore);
+
+                // Create a local var for diff write access.
+                auto diffWriteVar = nextBlockBuilder.emitVar(diffType);
+                result.propagateFuncSpecificPrimalInsts.add(diffWriteVar);
+                copyNameHintAndDebugDecorations(diffWriteVar, fwdParam);
+
+                // Initialize write var to 0.
+                auto writeStore = nextBlockBuilder.emitStore(diffWriteVar, initDiff);
+                result.propagateFuncSpecificPrimalInsts.add(writeStore);
+
+                diffWriteRefReplacement = diffWriteVar;
+
+                // Create a local var for the primal logic in the propagate func.
+                auto primalVar = nextBlockBuilder.emitVar(primalType);
+                copyNameHintAndDebugDecorations(primalVar, fwdParam);
+
+                result.propagateFuncSpecificPrimalInsts.add(primalVar);
+                auto initPrimalVal = nextBlockBuilder.emitDifferentialPairGetPrimal(loadedParam);
+                result.propagateFuncSpecificPrimalInsts.add(initPrimalVal);
+                auto storeInst = nextBlockBuilder.emitStore(primalVar, initPrimalVal);
+                result.propagateFuncSpecificPrimalInsts.add(storeInst);
+                result.mapPrimalSpecificParamToReplacementInPropFunc[primalParam] = primalVar;
+                result.outDiffWritebacks[diffParam] = InstPair(initPrimalVal, diffVar);
+
+                instsToRemove.add(fwdParam);
             }
-        }
-        else if (!inoutType)
-        {
-            // Case 4: `in` differentiable parameters.
-
-            SLANG_RELEASE_ASSERT(diffPairType);
-
-            // Create inout version.
-            auto inoutDiffPairType = builder->getInOutType(diffPairType);
-            primalRefReplacement = builder->emitParam(primalType);
-            copyNameHintAndDebugDecorations(primalRefReplacement, fwdParam);
-
-            result.primalFuncParams.add(primalRefReplacement);
-            auto propParam = builder->emitParam(inoutDiffPairType);
-            copyNameHintAndDebugDecorations(propParam, fwdParam);
-            result.propagateFuncParams.add(propParam);
-
-            // A reference to this parameter from the diff blocks should be replaced with a load
-            // of the differential component of the pair.
-            auto newParamLoad = diffBuilder.emitLoad(propParam);
-            diffBuilder.markInstAsDifferential(newParamLoad, primalType);
-            result.propagateFuncSpecificPrimalInsts.add(newParamLoad);
-
-            diffRefReplacement =
-                diffBuilder.emitDifferentialPairGetDifferential(diffType, newParamLoad);
-            diffBuilder.markInstAsDifferential(diffRefReplacement, primalType);
-            result.propagateFuncSpecificPrimalInsts.add(diffRefReplacement);
-
-            // Load the primal component from the prop param and use it as replacement for the
-            // primal param in the primal part of the prop func.
-            // Since these are logic specific to propagate function, we will add them to the
-            // `propagateFuncSpecificPrimalInsts` set so we can remove them when we generate the
-            // primal func.
-            auto primalReplacementLoad = nextBlockBuilder.emitLoad(propParam);
-            result.propagateFuncSpecificPrimalInsts.add(primalReplacementLoad);
-            auto primalVal = nextBlockBuilder.emitDifferentialPairGetPrimal(primalReplacementLoad);
-            result.propagateFuncSpecificPrimalInsts.add(primalVal);
-            result.mapPrimalSpecificParamToReplacementInPropFunc[primalRefReplacement] = primalVal;
-
-            instsToRemove.add(fwdParam);
-        }
-        else
-        {
-            // Case 5: `inout` differentiable parameters.
-            SLANG_ASSERT(inoutType && diffPairType);
-
-            // Process differentiable inout parameters.
-            auto primalParam = builder->emitParam(builder->getInOutType(primalType));
-            copyNameHintAndDebugDecorations(primalParam, fwdParam);
-            result.primalFuncParams.add(primalParam);
-
-            auto diffParam = builder->emitParam(inoutType);
-            copyNameHintAndDebugDecorations(diffParam, fwdParam);
-            result.propagateFuncParams.add(diffParam);
-
-            // Primal references to this param is the new primal param.
-            primalRefReplacement = primalParam;
-
-            // Diff references to this param should be replaced with one local temp var
-            // for read and one separate temp var for write.
-
-            // Load the inital diff value.
-            auto loadedParam = nextBlockBuilder.emitLoad(diffParam);
-            result.propagateFuncSpecificPrimalInsts.add(loadedParam);
-
-            auto initDiff =
-                nextBlockBuilder.emitDifferentialPairGetDifferential(diffType, loadedParam);
-            result.propagateFuncSpecificPrimalInsts.add(initDiff);
-
-            // Create a local var for diff read access.
-            auto diffVar = nextBlockBuilder.emitVar(diffType);
-            copyNameHintAndDebugDecorations(diffVar, fwdParam);
-            result.propagateFuncSpecificPrimalInsts.add(diffVar);
-            diffRefReplacement = diffVar;
-
-            // Clear the diff read var to zero at start of the function.
-            auto dzero = getDifferentialZeroOfType(&nextBlockBuilder, primalType);
-            result.propagateFuncSpecificPrimalInsts.add(dzero);
-            auto initDiffStore = nextBlockBuilder.emitStore(diffVar, dzero);
-            result.propagateFuncSpecificPrimalInsts.add(initDiffStore);
-
-            // Create a local var for diff write access.
-            auto diffWriteVar = nextBlockBuilder.emitVar(diffType);
-            result.propagateFuncSpecificPrimalInsts.add(diffWriteVar);
-            copyNameHintAndDebugDecorations(diffWriteVar, fwdParam);
-
-            // Initialize write var to 0.
-            auto writeStore = nextBlockBuilder.emitStore(diffWriteVar, initDiff);
-            result.propagateFuncSpecificPrimalInsts.add(writeStore);
-
-            diffWriteRefReplacement = diffWriteVar;
-
-            // Create a local var for the primal logic in the propagate func.
-            auto primalVar = nextBlockBuilder.emitVar(primalType);
-            copyNameHintAndDebugDecorations(primalVar, fwdParam);
-
-            result.propagateFuncSpecificPrimalInsts.add(primalVar);
-            auto initPrimalVal = nextBlockBuilder.emitDifferentialPairGetPrimal(loadedParam);
-            result.propagateFuncSpecificPrimalInsts.add(initPrimalVal);
-            auto storeInst = nextBlockBuilder.emitStore(primalVar, initPrimalVal);
-            result.propagateFuncSpecificPrimalInsts.add(storeInst);
-            result.mapPrimalSpecificParamToReplacementInPropFunc[primalParam] = primalVar;
-            result.outDiffWritebacks[diffParam] = InstPair(initPrimalVal, diffVar);
-
-            instsToRemove.add(fwdParam);
         }
 
         // We have emitted all the new parameters and computed the replacements for the original
@@ -1277,6 +1382,7 @@ ParameterBlockTransposeInfo BackwardDiffTranscriberBase::splitAndTransposeParame
         List<IRUse*> uses;
         for (auto use = fwdParam->firstUse; use; use = use->nextUse)
             uses.add(use);
+
         for (auto use : uses)
         {
             if (auto primalRef = as<IRPrimalParamRef>(use->getUser()))
@@ -1357,17 +1463,13 @@ ParameterBlockTransposeInfo BackwardDiffTranscriberBase::splitAndTransposeParame
         result.propagateFuncParams.add(dOutParam);
     }
 
-    // Add a parameter for intermediate val.
-    auto ctxParam =
-        builder->emitParam(as<IRFuncType>(diffFunc->getDataType())->getParamType(paramCount - 1));
-    builder->addNameHintDecoration(ctxParam, UnownedStringSlice("_s_diff_ctx"));
-    builder->addDecoration(ctxParam, kIROp_PrimalContextDecoration);
-    result.primalFuncParams.add(ctxParam);
-    result.propagateFuncParams.add(ctxParam);
     result.dOutParam = dOutParam;
 
-    diffFunc->sourceLoc = primalLoc;
-    ctxParam->sourceLoc = primalLoc;
+    // Add a parameter for intermediate val.
+    /*
+    auto ctxParam =
+        builder->emitParam(as<IRFuncType>(diffFunc->getDataType())->getParamType(paramCount - 1));
+    */
 
     return result;
 }

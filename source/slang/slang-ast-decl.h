@@ -190,6 +190,8 @@ FIDDLE()
 class SynthesizedStructDecl : public AggTypeDecl
 {
     FIDDLE(...)
+    DeclRef<FunctionDeclBase> targetFuncDeclRef;
+    uint32_t irOp;
 };
 
 FIDDLE()

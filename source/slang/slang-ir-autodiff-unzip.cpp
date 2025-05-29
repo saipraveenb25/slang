@@ -116,10 +116,11 @@ struct ExtractPrimalFuncContext
         for (UInt i = 0; i < originalFuncType->getParamCount(); i++)
             paramTypes.add(
                 (IRType*)migrationContext.cloneInst(&builder, originalFuncType->getParamType(i)));
-        paramTypes.add(builder.getOutType((IRType*)outIntermediateType));
-        auto resultType =
-            (IRType*)migrationContext.cloneInst(&builder, originalFuncType->getResultType());
-        auto newFuncType = builder.getFuncType(paramTypes, resultType);
+
+        // paramTypes.add(builder.getOutType((IRType*)outIntermediateType));
+        /*auto resultType =
+            (IRType*)migrationContext.cloneInst(&builder, originalFuncType->getResultType());*/
+        auto newFuncType = builder.getFuncType(paramTypes, (IRType*)outIntermediateType);
         return newFuncType;
     }
 
@@ -193,6 +194,13 @@ struct ExtractPrimalFuncContext
         auto key = field->getKey();
         if (auto nameHint = inst->findDecoration<IRNameHintDecoration>())
             cloneDecoration(nameHint, key);
+
+        //
+        // TODO: Stopped here: put the return value into the
+        // intermediate struct at the end & fill in the third function (getVal)
+        // with a getter.
+        //
+
         builder.addPrimalValueStructKeyDecoration(inst, key);
         builder.emitStore(
             builder
@@ -217,14 +225,15 @@ struct ExtractPrimalFuncContext
 
         auto paramBlock = func->getFirstBlock();
         builder.setInsertInto(paramBlock);
-        auto oldIntermediateParam = func->getLastParam();
-        auto outIntermediary = builder.emitParam(builder.getOutType((IRType*)intermediateType));
+        auto oldIntermediateParam = func->getFirstParam();
+
+        auto firstBlock = *(paramBlock->getSuccessors().begin());
+        builder.setInsertInto(firstBlock);
+        auto outIntermediary = builder.emitVar((IRType*)intermediateType);
         oldIntermediateParam->transferDecorationsTo(outIntermediary);
         primalParams.add(outIntermediary);
         oldIntermediateParam->replaceUsesWith(outIntermediary);
         oldIntermediateParam->removeAndDeallocate();
-
-        auto firstBlock = *(paramBlock->getSuccessors().begin());
 
         List<IRBlock*> diffBlocksList;
         List<IRBlock*> primalBlocksList;
@@ -287,7 +296,7 @@ struct ExtractPrimalFuncContext
             builder.setInsertBefore(term);
             if (auto decor = term->findDecoration<IRBackwardDerivativePrimalReturnDecoration>())
             {
-                builder.emitReturn(decor->getBackwardDerivativePrimalReturnValue());
+                builder.emitReturn(builder.emitLoad(outIntermediary));
                 term->removeAndDeallocate();
             }
         }

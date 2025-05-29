@@ -1973,7 +1973,8 @@ public:
         RefPtr<WitnessTable> witnessTable,
         SynthesisPattern pattern);
 
-    bool trySynthesizeForwardDiffFuncRequirementWitness(
+    /// AD 2.0 version of `trySynthesizeDifferentialMethodRequirementWitness`.
+    bool trySynthesizeDiffFuncRequirementWitness(
         ConformanceCheckingContext* context,
         DeclRef<Decl> requirementDeclRef,
         RefPtr<WitnessTable> witnessTable);
@@ -1991,6 +1992,11 @@ public:
         RefPtr<WitnessTable> witnessTable);
 
     bool trySynthesizeForwardDiffFuncTypeRequirementWitness(
+        ConformanceCheckingContext* context,
+        DeclRef<AssocTypeDecl> requirementDeclRef,
+        RefPtr<WitnessTable> witnessTable);
+
+    bool trySynthesizeBwdContextTypeRequirementWitness(
         ConformanceCheckingContext* context,
         DeclRef<AssocTypeDecl> requirementDeclRef,
         RefPtr<WitnessTable> witnessTable);

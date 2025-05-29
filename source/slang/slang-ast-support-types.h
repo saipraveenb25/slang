@@ -1696,6 +1696,8 @@ FIDDLE() namespace Slang
         ForwardDerivativeFunc,     ///< The "fwd_diff" built-in function on functions
         BwdCallableContextType,    ///< The "BwdCallable" built-in associatedtype on functions
         BwdApplyFunc,              ///< The "apply_bwd" built-in function on functions
+        BwdCallablePropFunc,       ///< The "context_type.operator()" built-in function
+        BwdCallableGetValFunc      ///< The "context_type.val()" built-in function
     };
 
     enum class FunctionDifferentiableLevel
